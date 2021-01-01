@@ -1,0 +1,31 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import os
+import os.path as osp
+from copy import deepcopy
+
+import torch
+import torch.nn as nn
+from torch.nn import functional as F
+from torch.utils.data import DataLoader
+import pytorch_lightning as pl
+import hydra
+from omegaconf import OmegaConf
+
+from bvpr import *
+
+
+CONFIG_DIR = osp.abspath(osp.join(__file__, "../..", "config"))
+
+
+@hydra.main(config_path=CONFIG_DIR, config_name="train")
+def main(config):
+    config = OmegaConf.to_container(config)
+    config = pl.utilities.parsing.AttributeDict(config)
+    pl.seed_everything(config["seed"])
+    print(config)
+
+
+if __name__ == "__main__":
+    main()
