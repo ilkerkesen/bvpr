@@ -1,0 +1,21 @@
+# @package _group_
+model: LSTMCNNBaseline
+multiscale: true
+location_embeddings: true
+text_encoder:
+  name: LSTMEncoder
+  hidden: 256
+  bidirectional: false
+  embedding_dim: 300
+  glove: true
+  dropout: 0.2
+image_encoder:
+  name: resnet18
+  num_layers: 4
+  pretrained: true
+  freeze: true
+mask_predictor:
+  num_layers: 3
+  kernel_size: 5
+  stride: 2
+  padding: 2
