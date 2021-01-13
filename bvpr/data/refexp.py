@@ -26,8 +26,7 @@ import scipy.io as sio
 from referit import REFER
 import torch.utils.data as data
 from referit.refer import mask as cocomask
-from utils.corpus import Corpus
-from pytorch_pretrained_bert import BertTokenizer, BertModel
+from bvpr.data.corpus import Corpus
 from pathlib import Path
 
 import cv2
@@ -66,10 +65,11 @@ class ReferDataset(data.Dataset):
                  split='train', max_query_len=-1, bertencoding=False,
                  bert=False, corpus_file=None, features_path=None):
         self.images = []
-        self.data_root = data_root
+        self.data_root = osp.expanduser(data_root)
         self.split_root = split_root
         if split_root is None:
             self.split_root = osp.join(self.data_root, '..', 'processed')
+            self.split_root = osp.abspath(osp.expanduser(self.split_root))
         self.dataset = dataset
         self.query_len = max_query_len
         self.corpus = Corpus()
@@ -194,14 +194,6 @@ class ReferDataset(data.Dataset):
         split_dataset = []
         vocab_file = osp.join(self.split_dir, 'vocabulary_Gref.txt')
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if self.bertencoding:
-            tokenizer = BertTokenizer.from_pretrained(osp.join(Path().absolute(), 'utils/bert_repo/bert-large-uncased-vocab.txt'))
-            model = BertModel.from_pretrained(osp.join(Path().absolute(), 'utils/bert_repo/bert-large-uncased.tar.gz'))
-            model.to(device)
-            model.eval()
-        if self.bert:
-            tokenizer = BertTokenizer.from_pretrained(osp.join(Path().absolute(), 'utils/bert_repo/bert-base-uncased-vocab.txt'))
-
         refer = REFER(
             self.data_root, **(
                 self.SUPPORTED_DATASETS[self.dataset]['params']))
@@ -217,6 +209,7 @@ class ReferDataset(data.Dataset):
             self.corpus.load_file(vocab_file)
             torch.save(self.corpus, corpus_file)
 
+        return
         if not osp.exists(self.mask_dir):
             os.makedirs(self.mask_dir)
         maxlen = 0
@@ -235,38 +228,8 @@ class ReferDataset(data.Dataset):
                 if not osp.exists(mask_filename):
                     torch.save(mask, mask_filename)
                 for sentence in ref['sentences']:
-                    if self.bertencoding:
-                        tokenized_text = tokenizer.tokenize(sentence['sent'])
-                        tokenized_text = ['[CLS]'] + tokenized_text + ['[SEP]']
-                        indexed_tokens = tokenizer.convert_tokens_to_ids(tokenized_text)
-                        segments_ids = [0] * len(indexed_tokens)
-                        tokens_tensor = torch.tensor([indexed_tokens]).to(device)
-                        segments_tensors = torch.tensor([segments_ids]).to(device)
-                        with torch.no_grad():
-                            encoded_layers, pooled = model(tokens_tensor, segments_tensors, output_all_encoded_layers=False)
-                            ref_embedding = pooled.unsqueeze().cpu()
-                        split_dataset.append((
-                            img_filename, mask_file, ref_embedding))
-                    elif self.bert:
-                        tokenized_text = tokenizer.tokenize(sentence['sent'])
-                        if len(tokenized_text) > maxlen:
-                            maxlen = len(tokenized_text)
-                        if len(tokenized_text) > self.query_len:
-                            tokenized_text = tokenized_text[:self.query_len]
-
-                        tokenized_text = ['[CLS]'] + tokenized_text + ['[SEP]']
-                        indexed_tokens = tokenizer.convert_tokens_to_ids(tokenized_text)
-                        segment_ids = [0] * len(indexed_tokens)
-                        input_mask = [1] * len(indexed_tokens)
-                        padding = [0] * (self.query_len + 2 - len(input_mask))
-                        indexed_tokens += padding
-                        input_mask += padding
-                        segment_ids += padding
-                        split_dataset.append((
-                            img_filename, mask_file, indexed_tokens, segment_ids, input_mask))
-                    else:
-                        split_dataset.append((
-                            img_filename, mask_file, sentence['sent']))
+                    split_dataset.append((
+                        img_filename, mask_file, sentence['sent']))
         print("Maxlen: ", maxlen)
 
         output_file = '{0}_{1}.pth'.format(self.dataset, setname)
@@ -377,23 +340,11 @@ class ReferDataset(data.Dataset):
         return (data, size)
 
     def pull_item(self, idx):
-        if self.bert:
-            img_file, mask_file, phrase, segment, lang_mask = self.images[idx]
-        else:
-            img_file, mask_file, phrase = self.images[idx]
-
-        if self.features_path is None:
-            data, size = self.read_image(img_file)
-        else:
-            data, size = self.read_features(img_file)
-
+        img_file, mask_file, phrase = self.images[idx]
+        data, size = self.read_image(img_file)
         mask_path = osp.join(self.mask_dir, mask_file)
         mask = torch.load(mask_path)
-
-        if self.bert:
-            return data, mask, phrase, segment, lang_mask
-        else:
-            return data, mask, size, phrase
+        return data, mask, size, phrase
 
     def tokenize_phrase(self, phrase):
         return self.corpus.tokenize(phrase, self.query_len)
@@ -405,24 +356,13 @@ class ReferDataset(data.Dataset):
         return len(self.images)
 
     def __getitem__(self, idx):
-        if self.bert:
-            data, mask, phrase, segment, lang_mask = self.pull_item(idx)
-        else:
-            data, mask, size, phrase = self.pull_item(idx)
+        data, mask, size, phrase = self.pull_item(idx)
         if self.transform is not None and self.features_path is None:
             data = self.transform(data)
         if self.mask_transform is not None:
-            # mask = mask.byte() * 255
             mask = self.mask_transform(mask)
-        if not (self.bertencoding or self.bert):
-            phrase = self.tokenize_phrase(phrase)
-        if self.bert:
-            #print("Sizes: ")
-            #for t_ in [img, mask, size_mask, torch.tensor(phrase), torch.tensor(segment), torch.tensor(lang_mask)]:
-            #    print("Size: ", t_.size())
-            return img, mask, size_mask, torch.tensor(phrase), torch.tensor(segment), torch.tensor(lang_mask)
-        else:
-            return data, mask, size, phrase
+        phrase = self.tokenize_phrase(phrase)
+        return data, mask, size, phrase
 
 
 def collate_fn(unsorted_batch):

@@ -5,3 +5,5 @@ torchaudio===0.7.2
 torchtext==0.8.1
 pytorch-lightning==1.1.2
 scikit-image==0.18.1
+git+https://github.com/andfoy/refer.git
+opencv-python==4.5.1.48

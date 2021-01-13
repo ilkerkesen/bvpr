@@ -14,12 +14,12 @@ class LSTMCNNBaseline(nn.Module):
         self.image_encoder = self.setup_submodule(config, "image_encoder")
         self.text_encoder = self.setup_submodule(config, "text_encoder")
         num_channels = self.image_encoder.num_channels
-        hidden_size = self.text_encoder.config["hidden"]
-        self.mask_predictor = UpsamplingNetwork(
-            config, input_channels=num_channels+hidden_size)
+        hidden_size = self.text_encoder.config["hidden_size"]
+        self.mask_predictor = MaskPredictor(
+            config["mask_predictor"], in_channels=num_channels+hidden_size)
         self.config = config
 
-    def setup_submodule(self, model_config, submodule):
+    def setup_submodule(self, model_config, submodule, **kwargs):
         config = model_config[submodule]
         submodule_class = eval(config["name"])
         return submodule_class(config)

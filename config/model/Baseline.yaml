@@ -4,7 +4,7 @@ multiscale: true
 location_embeddings: true
 text_encoder:
   name: LSTMEncoder
-  hidden: 256
+  hidden_size: 256
   bidirectional: false
   embedding_dim: 300
   glove: true

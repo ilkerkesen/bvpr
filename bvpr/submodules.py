@@ -1,6 +1,7 @@
 import os
 import os.path as osp
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,7 +21,7 @@ __all__ = (
 
 
 def get_glove_vectors(corpus):
-    glove = GLOVEVOCAB.GloVe(name='840B', dim=300) #, cache=glove_cache)
+    glove = GloVe(name='840B', dim=300) #, cache=glove_cache)
     vectors = np.zeros((len(corpus.dictionary), 300))
     count = 0
     for word, idx in corpus.dictionary.word2idx.items():
@@ -55,6 +56,44 @@ def resnet18(config):
     net.config = config
     return net
 
+class CBR(nn.Module):
+    """(conv => BN => Relu)"""
+    def __init__(self, in_ch, out_ch, kernel, stride, padding):
+        super(CBR, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, kernel, stride=stride, padding=padding),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+class CBRTranspose(nn.Module):
+    """(deconv => BN => Relu)"""
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding,
+                pdrop=0.0):
+        super(CBRTranspose, self).__init__()
+        self.deconv = nn.ConvTranspose2d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=padding)
+        self.bnorm = nn.BatchNorm2d(out_channels)
+        self.act = nn.ReLU(inplace=True)
+        self.dropout = nn.Dropout(pdrop)
+        self.pdrop = pdrop
+
+    def forward(self, x, output_size=None):
+        if self.pdrop > 0:
+            x = self.dropout(x)
+        x = self.deconv(x, output_size=output_size)
+        x = self.bnorm(x)
+        x = self.act(x)
+        return x
+
 
 class LSTMEncoder(nn.Module):
     def __init__(self, config):
@@ -76,8 +115,7 @@ class LSTMEncoder(nn.Module):
 
 
 class MaskPredictor(nn.Module):
-    def __init__(self, config, num_layers=3, kernel_size=5, stride=2,
-                 padding=2, input_dimension=None): #num_layers=3 for resnet (1/8)
+    def __init__(self, config, in_channels=None):
         super().__init__()
         self.layers  = nn.ModuleList()
         self.loss_output_layers = nn.ModuleList()
@@ -85,7 +123,6 @@ class MaskPredictor(nn.Module):
         config["num_kernels"] = config.get("num_kernels", 3)
         layer_kwargs = {
             "in_channels": config["num_kernels"],
-            "out_channels": 1,
             "kernel_size": config["kernel_size"],
             "stride": config["stride"],
             "padding": config["padding"],
@@ -94,12 +131,13 @@ class MaskPredictor(nn.Module):
 
         for i in range(config["num_layers"]-1):
             in_ch = out_ch = config["num_kernels"] 
-            if i == 0 and input_channels is not None:
-                in_ch = input_channels
-            self.layers.append(CBRTranspose(config))
+            if i == 0 and in_channels is not None:
+                in_ch = in_channels
+            self.layers.append(CBRTranspose(**layer_kwargs, out_channels=out_ch))
             if i == 0: continue #FIXME: why?
-            self.loss_output_layers.append(nn.ConvTranspose2d(**layer_kwargs))
-        self.layers.append(nn.ConvTranspose2d(**layer_kwargs))
+            self.loss_output_layers.append(nn.ConvTranspose2d(
+                **layer_kwargs, out_channels=1))
+        self.layers.append(nn.ConvTranspose2d(**layer_kwargs, out_channels=1))
 
     def forward(self, x, image_size=None):
         B, _, _, _ = x.size()

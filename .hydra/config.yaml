@@ -22,7 +22,7 @@ model:
   location_embeddings: true
   text_encoder:
     name: LSTMEncoder
-    hidden: 256
+    hidden_size: 256
     bidirectional: false
     embedding_dim: 300
     glove: true
@@ -38,7 +38,8 @@ model:
     stride: 2
     padding: 2
 dataset:
-  foo: bar
+  dataset: unc
+  data_root: ~/data/refexp/data
 optimizer:
   foo: bar
 scheduler:

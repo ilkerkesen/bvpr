@@ -7,4 +7,5 @@ __all__ = (
 
 def process_config(config, dataset):
     config = deepcopy(config)
+    config["text_encoder"]["corpus"] = dataset.corpus
     return config
