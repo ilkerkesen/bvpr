@@ -1,2 +1,4 @@
 # @package _group_
-foo: bar
+method: Adam
+params:
+  lr: 0.0003

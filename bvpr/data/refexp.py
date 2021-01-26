@@ -363,16 +363,3 @@ class ReferDataset(data.Dataset):
             mask = self.mask_transform(mask)
         phrase = self.tokenize_phrase(phrase)
         return data, mask, size, phrase
-
-
-def collate_fn(unsorted_batch):
-    batch = sorted(unsorted_batch, key=lambda i: len(i[-1]), reverse=True)
-    pack = lambda i: torch.cat([bi[i].unsqueeze(0) for bi in batch], 0)
-    img, mask, size = tuple(pack(i) for i in range(len(batch[0])-1))
-    batchsize = len(batch)
-    longest = len(batch[0][-1])
-    text = torch.zeros((batchsize, longest), dtype=torch.long)
-    for (i,bi) in enumerate(batch):
-        sent = bi[-1]
-        text[i, -len(sent):] = sent
-    return img.float(), mask.float(), size, text

@@ -1,5 +1,5 @@
 # @package _group_
-model: LSTMCNNBaseline
+architecture: LSTMCNNBaseline
 multiscale: true
 location_embeddings: true
 text_encoder:

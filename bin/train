@@ -14,9 +14,11 @@ import hydra
 from omegaconf import OmegaConf
 
 from bvpr import *
-from bvpr.util import process_config
+from bvpr.util import process_config, create_checkpoint_callback
 from bvpr.models import LSTMCNNBaseline
 from bvpr.data.refexp import ReferDataset as Dataset
+from bvpr.experiment import SegmentationExperiment as Experiment
+from bvpr.datamodule import SegmentationDataModule as DataModule
 
 
 CONFIG_DIR = osp.abspath(osp.join(__file__, "../..", "config"))
@@ -28,10 +30,28 @@ def main(config):
     config = pl.utilities.parsing.AttributeDict(config)
     pl.seed_everything(config["seed"])
     print(config)
-    dataset = Dataset(**config["dataset"])
-    config["model"] = process_config(config["model"], dataset)
-    model = LSTMCNNBaseline(config["model"])
-    import ipdb; ipdb.set_trace()
+
+    # data
+    train_data = Dataset(split="train", **config["dataset"])
+    val_data = Dataset(split="val", **config["dataset"])
+    config["model"] = process_config(config["model"], train_data)
+    # model = LSTMCNNBaseline(config["model"])
+
+    # logger
+    config["logger"]["save_dir"] = osp.abspath(
+        osp.expanduser(config["logger"]["save_dir"]))
+    if config["logger"]["name"] is None:
+        config["logger"]["name"] = config["model"]["architecture"]
+    logger = pl.loggers.TensorBoardLogger(**config["logger"])
+
+    # checkpoint
+    callback, path = create_checkpoint_callback(config, logger.log_dir)
+    config["trainer"]["resume_from_checkpoint"] = path
+    experiment = Experiment(config)
+    datamodule = DataModule(config)
+    trainer = pl.Trainer(**config["trainer"]) 
+    trainer.fit(experiment, datamodule=datamodule)
+
 
 
 if __name__ == "__main__":

@@ -25,7 +25,8 @@ class LSTMCNNBaseline(nn.Module):
         return submodule_class(config)
 
     def forward(self, img, seq, size=None):
-        vis = self.convnet(img, size)
+        # vis = self.image_encoder(img, size)
+        vis = self.image_encoder(img)
         txt = self.text_encoder(seq)
         B, L  = txt.size()
         B, C, H, W = vis.size()
