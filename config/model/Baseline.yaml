@@ -15,7 +15,7 @@ image_encoder:
   pretrained: true
   freeze: true
 mask_predictor:
-  num_layers: 3
+  num_channels: 64
   kernel_size: 5
   stride: 2
   padding: 2

@@ -100,9 +100,10 @@ class MaskedMultiScaleBCELoss(nn.BCELoss):
                     resized_target = target
                 mask = make_mask(scaled_sizes, resized_target.size()[-2:])
                 ypred, ygold = logits[mask], resized_target[mask]
-            iter_loss += ratio * F.binary_cross_entropy(ypred, ygold,
-                                                        weight=self.weight,
-                                                        reduction=self.reduction)
+            iter_loss += ratio * F.binary_cross_entropy_with_logits(
+                ypred, ygold,
+                weight=self.weight,
+                reduction=self.reduction)
             if ratio == 0.5:
                 ratio = 1.0
             else:

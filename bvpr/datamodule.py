@@ -45,8 +45,8 @@ class SegmentationDataModule(pl.LightningDataModule):
         ])
 
         self.val_mask_transform = ts.Compose([
-            DownsizeImage(train_image_dim),
-            PadBottomRight(train_image_dim),
+            DownsizeImage(val_image_dim),
+            PadBottomRight(val_image_dim),
         ])
 
         self.config = config
@@ -101,8 +101,8 @@ def collate_fn(unsorted_batch):
     img, mask, size = tuple(pack(i) for i in range(len(batch[0])-1))
     batchsize = len(batch)
     longest = len(batch[0][-1])
-    text = torch.zeros((batchsize, longest), dtype=torch.long)
+    text = torch.zeros((longest, batchsize), dtype=torch.long)
     for (i,bi) in enumerate(batch):
         sent = bi[-1]
-        text[i, -len(sent):] = sent
-    return img.float(), mask.float(), size, text
+        text[-len(sent):, i] = sent
+    return img.float(), text, size, mask.float()

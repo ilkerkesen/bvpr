@@ -13,8 +13,7 @@ import pytorch_lightning as pl
 import hydra
 from omegaconf import OmegaConf
 
-from bvpr import *
-from bvpr.util import process_config, create_checkpoint_callback
+from bvpr.util import process_config, create_callbacks
 from bvpr.models import LSTMCNNBaseline
 from bvpr.data.refexp import ReferDataset as Dataset
 from bvpr.experiment import SegmentationExperiment as Experiment
@@ -45,11 +44,14 @@ def main(config):
     logger = pl.loggers.TensorBoardLogger(**config["logger"])
 
     # checkpoint
-    callback, path = create_checkpoint_callback(config, logger.log_dir)
-    config["trainer"]["resume_from_checkpoint"] = path
+    callbacks, ckpt_path = create_callbacks(config, logger.log_dir)
+    config["trainer"]["resume_from_checkpoint"] = ckpt_path
     experiment = Experiment(config)
     datamodule = DataModule(config)
-    trainer = pl.Trainer(**config["trainer"]) 
+    trainer = pl.Trainer(
+        logger=logger,
+        callbacks=callbacks,
+        **config["trainer"]) 
     trainer.fit(experiment, datamodule=datamodule)
 
 

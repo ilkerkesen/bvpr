@@ -21,13 +21,13 @@ def compute_iou(mask, target):
     return intersection, union
 
 
-def compute_thresholded(mask, target, thresholds):
+def compute_thresholded(predicted, target, thresholds):
     batch_size, num_thresholds = predicted.size(0), len(thresholds)
     intersection = torch.zeros(batch_size, num_thresholds)
     union = torch.zeros(batch_size, num_thresholds)
 
     for (idx, threshold) in enumerate(thresholds):
-        thresholded = (mask > threshold).float().data
+        thresholded = (predicted > threshold).float().data
         intersection[:, idx], union[:, idx] = compute_iou(thresholded, target)
-        
+
     return intersection, union

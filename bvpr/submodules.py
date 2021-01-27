@@ -46,10 +46,7 @@ def resnet18(config):
     layers = list(net.children())
     net = nn.Sequential(*layers[:4+config["num_layers"]-1])
     if config["pretrained"] and config["freeze"]:
-        net.normalizer = Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225])
-        for par in net.parameters():
+       for par in net.parameters():
             par.requires_grad = False
     out_channels = 2**(5+config["num_layers"]-1)
     net.num_channels = out_channels
@@ -115,14 +112,11 @@ class LSTMEncoder(nn.Module):
 
 
 class MaskPredictor(nn.Module):
-    def __init__(self, config, in_channels=None):
+    def __init__(self, config, in_channels):
         super().__init__()
         self.layers  = nn.ModuleList()
         self.loss_output_layers = nn.ModuleList()
-        config["num_layers"] = config.get("num_layers", 3)
-        config["num_kernels"] = config.get("num_kernels", 3)
         layer_kwargs = {
-            "in_channels": config["num_kernels"],
             "kernel_size": config["kernel_size"],
             "stride": config["stride"],
             "padding": config["padding"],
@@ -130,14 +124,24 @@ class MaskPredictor(nn.Module):
         self.config = config
 
         for i in range(config["num_layers"]-1):
-            in_ch = out_ch = config["num_kernels"] 
-            if i == 0 and in_channels is not None:
-                in_ch = in_channels
-            self.layers.append(CBRTranspose(**layer_kwargs, out_channels=out_ch))
-            if i == 0: continue #FIXME: why?
-            self.loss_output_layers.append(nn.ConvTranspose2d(
-                **layer_kwargs, out_channels=1))
-        self.layers.append(nn.ConvTranspose2d(**layer_kwargs, out_channels=1))
+            _in_channels = config["num_channels"] if i > 0 else in_channels
+            self.layers.append(
+                CBRTranspose(
+                    **layer_kwargs,
+                    in_channels=_in_channels,
+                    out_channels=config["num_channels"]))
+            if i == 0:
+                continue  # FIXME: why?
+            self.loss_output_layers.append(
+                nn.ConvTranspose2d(
+                    **layer_kwargs,
+                    in_channels=in_channels,
+                    out_channels=1))
+        self.layers.append(
+            nn.ConvTranspose2d(
+                **layer_kwargs,
+                in_channels=config["num_channels"],
+                out_channels=1))
 
     def forward(self, x, image_size=None):
         B, _, _, _ = x.size()
@@ -149,15 +153,11 @@ class MaskPredictor(nn.Module):
         if image_size is not None:
             _, _, H, W = image_size
 
-        if self.config["use_features"]: #FIXME: IDK this thing
-            H = 8*(H-1)
-            W = 8*(W-1)
-
         for i, layer in enumerate(self.layers[:last_layer_indx]):
             output_size = None
             if image_size is not None:
-                frac = 2**(config["num_layers"]-i-1)
-                output_size = (B, config["num_kernels"], H // frac, W // frac)
+                frac = 2**(self.config["num_layers"]-i-1)
+                output_size = (B, self.config["num_channels"], H // frac, W // frac)
                 output_size2 = (B, 1, output_size[2] * 2, output_size[3] * 2)
 
             y = layer(y, output_size=output_size)

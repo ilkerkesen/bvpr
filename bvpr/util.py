@@ -11,23 +11,24 @@ __all__ = (
 )
 
 
-def process_config(config, dataset):
-    config = deepcopy(config)
-    config["text_encoder"]["corpus"] = dataset.corpus
-    return config
+def process_config(cfg, dataset):
+    cfg = deepcopy(cfg)
+    cfg["text_encoder"]["corpus"] = dataset.corpus
+    cfg["mask_predictor"]["num_layers"] = cfg["image_encoder"]["num_layers"]
+    return cfg
 
 
 def make_mask(real, downsized):
     B = len(real)
     dh, dw = downsized
-    mask = torch.zeros(B, 1, dh, dw, dtype=torch.uint8)
+    mask = torch.zeros(B, 1, dh, dw, dtype=torch.bool)
     for i in range(B):
         this_h, this_w = real[i]
         mask[i, 0, :this_h, :this_w] = 1
     return mask
 
 
-def create_checkpoint_callback(config, log_dir):
+def create_callbacks(config, log_dir):
     checkpoints_path = osp.join(log_dir, "checkpoints")
     config["checkpoint"]["filepath"] = osp.join(checkpoints_path, "{epoch:03d}")
     checkpoint_callback = pl.callbacks.ModelCheckpoint(**config["checkpoint"])
@@ -42,4 +43,4 @@ def create_checkpoint_callback(config, log_dir):
     if ckpt_path is not None and not osp.isfile(ckpt_path):
         raise Exception("ckpt does not exist at {}".format(ckpt_path))
 
-    return checkpoint_callback, ckpt_path
+    return [checkpoint_callback], ckpt_path

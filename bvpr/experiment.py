@@ -17,7 +17,7 @@ class SegmentationExperiment(LightningModule):
         self.model = eval(config["model"]["architecture"])(config["model"])
         self.criterion = eval(config["criterion"])()
         self.thresholds = torch.arange(0, 1, step=0.05).tolist()
-        self.IoU_thresholds = torch.arange(0.5, 1.0, 0.1).reshape(1, 1, -1)
+        self.IoU_thresholds = torch.arange(0.5, 1.0, 0.1).reshape(1, -1)
         self.save_hyperparameters(config)
         self.config = config
 
@@ -37,9 +37,9 @@ class SegmentationExperiment(LightningModule):
     def validation_step(self, batch, batch_index):
         image, text, size, target = batch
         predicted = self(image, text, size=size)
-        loss = self.criterion(predicted)
+        loss = self.criterion(predicted, target, size)
         
-        if isinstance(predicted, tuple) or isinstance(predicted, tuple):
+        if isinstance(predicted, tuple) or isinstance(predicted, list):
             predicted = predicted[-1]
 
         I, U = compute_thresholded(predicted, target, self.thresholds)
@@ -53,12 +53,12 @@ class SegmentationExperiment(LightningModule):
 
     def validation_epoch_end(self, outputs):
         cum_I = torch.zeros(len(self.thresholds))
-        cum_U = cum_I.deatch().clone()
+        cum_U = cum_I.detach().clone()
         num_instances, total_loss = 0, 0.0
         num_correct = torch.zeros(
             len(self.thresholds),
             self.IoU_thresholds.numel())
-        total_IoU = torch.zeros(len(self.tresholds))
+        total_IoU = torch.zeros(len(self.thresholds))
 
         for output in outputs:
             num_instances += output["B"]
@@ -68,6 +68,7 @@ class SegmentationExperiment(LightningModule):
             total_IoU += torch.sum(this_IoU, dim=0)
             cum_I += I.sum(0)
             cum_U += U.sum(0)
+            this_IoU = this_IoU.unsqueeze(-1)
             num_correct += torch.sum(this_IoU >= self.IoU_thresholds, dim=0)
 
         precision = num_correct / num_instances
