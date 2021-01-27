@@ -1,0 +1,5 @@
+# @package _group_
+method: ReduceLROnPlateau
+params:
+  factor: 0.1
+  patience: 5
