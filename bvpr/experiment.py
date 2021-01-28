@@ -74,7 +74,18 @@ class SegmentationExperiment(LightningModule):
         precision = num_correct / num_instances
         cum_IoU = cum_I / cum_U
         mIoU = total_IoU / num_instances
+
+        IoU = mIoU  # FIXME: add option for this
+        threshold_idx = IoU.argmax().item()
+        threshold_val = self.thresholds[threshold_idx]
+        this_precision = precision[threshold_idx].tolist()
+
         self.log("val_loss", total_loss / num_instances)
+        self.log("threshold", threshold_val)
+        self.log("mIoU", mIoU[threshold_idx].item())
+        self.log("cum_IoU", cum_IoU[threshold_idx].item())
+        for (th, pr) in zip(self.IoU_thresholds.tolist()[0], this_precision):
+            self.log("precision@{:.2f}".format(th), pr)
 
     def test_step(self, batch, batch_index):
         pass
