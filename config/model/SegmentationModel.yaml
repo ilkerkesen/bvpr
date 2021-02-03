@@ -1,0 +1,32 @@
+# @package _group_
+architecture: SegmentationModel
+multiscale: true
+use_location_embeddings: true
+text_encoder:
+  name: LSTMEncoder
+  hidden_size: 256
+  bidirectional: false
+  embedding_dim: 300
+  glove: true
+  dropout: 0.0
+image_encoder:
+  name: deeplabv3
+  num_layers: 4
+  pretrained: true
+  freeze: true
+multimodal_encoder:
+  topdown: true
+  bottomup: true
+  num_layers: 4
+  num_kernels: 96
+  connected: true
+  kernel_size: 5
+  stride: 2
+  dilation: 1
+  text_kernel_size: 1  
+  layer: "conv"  # or film
+mask_predictor:
+  num_channels: 96
+  kernel_size: 5
+  stride: 2
+  padding: 2

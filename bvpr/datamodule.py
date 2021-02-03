@@ -49,6 +49,9 @@ class SegmentationDataModule(pl.LightningDataModule):
             PadBottomRight(val_image_dim),
         ])
 
+        self.train_image_transform = self.val_image_transform
+        self.train_mask_transform = self.val_mask_transform
+
         self.config = config
 
     def setup(self, stage=None):
@@ -78,7 +81,7 @@ class SegmentationDataModule(pl.LightningDataModule):
     def train_dataloader(self):
         return DataLoader(
             self.train_data,
-            shuffle=True,
+            shuffle=False,
             collate_fn=collate_fn,
             **self.config["loader"])
         
