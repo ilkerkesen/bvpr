@@ -16,7 +16,6 @@ class SegmentationExperiment(LightningModule):
         super().__init__()
         self.model = eval(config["model"]["architecture"])(config["model"])
         self.criterion = eval(config["criterion"])()
-        # self.criterion = nn.BCEWithLogitsLoss()
         self.thresholds = torch.arange(0, 1, step=0.05).tolist()
         self.IoU_thresholds = torch.arange(0.5, 1.0, 0.1).reshape(1, -1)
         self.save_hyperparameters(config)
@@ -41,9 +40,10 @@ class SegmentationExperiment(LightningModule):
         loss = self.criterion(predicted, target, size)
 
         if isinstance(predicted, tuple) or isinstance(predicted, list):
-            predicted = torch.sigmoid(predicted[-1])
+            predicted = predicted[-1]
+        predicted = torch.sigmoid(predicted)
 
-        I, U = compute_thresholded(predicted, target, self.thresholds)
+        I, U = compute_thresholded(predicted, target, self.thresholds, size)
         B = image.size(0)
         return {
             "loss": loss,
@@ -114,4 +114,4 @@ class SegmentationExperiment(LightningModule):
             "frequency": 1,
             "strict": True,
         }]
-        return optimizers, schedulers  
+        return optimizers, schedulers

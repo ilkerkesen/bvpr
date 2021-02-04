@@ -89,6 +89,20 @@ class CBRTranspose(nn.Module):
         return x
 
 
+class FiLMLayer(nn.Module):
+    def __init__(self, in_features, out_features, embedding_dim):
+        super().__init__()
+        self.dense = nn.Linear(embedding_dim, in_features)
+        self.gamma_layer = nn.Linear(in_features, out_features)
+        self.beta_layer = nn.Linear(in_features, out_features)
+
+    def forward(self, x, c):
+        c = self.dense(c)
+        gamma = self.gamma_layer(c).view(x.size(0), x.size(1), 1, 1)
+        beta = self.beta_layer(c).view(x.size(0), x.size(1), 1, 1)
+        return gamma * x + beta
+
+
 class BatchConv2DLayer(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1,
                        padding=0, dilation=1):
@@ -280,7 +294,7 @@ class ImageEncoder(nn.Module):
         layers = list(model.backbone.children())
         num_layers = config["num_layers"]
         self.model = nn.Sequential(*layers[:4+num_layers])
-        self.num_downsample = 3 + int(num_layers > 2)
+        self.num_downsample = 2 + int(num_layers > 2)
         self.num_channels = 256 * 2**(num_layers-1)
         self.num_channels += 8 * self.use_location_embeddings
 
@@ -316,6 +330,7 @@ class MultimodalEncoder(nn.Module):
 class BottomUpEncoder(nn.Module):
     LAYER_DICT = {
         "conv": BatchConv2DKernelFromText,
+        "film": FiLMLayer,
     }
 
     def __init__(self, config):
@@ -374,6 +389,7 @@ class BottomUpEncoder(nn.Module):
 class TopDownEncoder(nn.Module):
     LAYER_DICT = {
         "conv": BatchConv2DKernelFromText,
+        "film": FiLMLayer,
     }
 
     def __init__(self, config):

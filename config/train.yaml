@@ -2,7 +2,7 @@ seed: 1
 image_size: 512
 
 defaults:
-  - model: Baseline
+  - model: SegmentationModel
   - dataset: UNC
   - optimizer: Adam
   - scheduler: ReduceLROnPlateau
@@ -21,7 +21,7 @@ loader:
 logger:
   name: null
   version: null
-  save_dir: ~/logs/bvpr/16bit
+  save_dir: ~/logs/bvpr/debug
 
 # checkpoint
 checkpoint:

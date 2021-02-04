@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from bvpr.submodules import *
 from bvpr.util import sizes2scales, scales2sizes
@@ -38,7 +39,6 @@ class LSTMCNNBaseline(nn.Module):
         txt = txt.reshape(B, L, 1, 1).expand(B, L, H, W)
         joint = torch.cat([vis, txt], dim=1)
         outputs = self.mask_predictor(joint, image_size=image.shape)
-        # return [torch.sigmoid(output) for output in outputs]
         return outputs
 
 
@@ -77,4 +77,4 @@ class SegmentationModel(nn.Module):
         txt = self.text_encoder(phrase)
         joint = self.multimodal_encoder(vis, txt, scale)
         outputs = self.mask_predictor(joint, image_size=image.shape)
-        return [torch.sigmoid(output) for output in outputs]
+        return outputs

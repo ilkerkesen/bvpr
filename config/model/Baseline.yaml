@@ -10,12 +10,12 @@ text_encoder:
   glove: true
   dropout: 0.2
 image_encoder:
-  name: resnet18
+  name: resnet50
   num_layers: 4
   pretrained: true
   freeze: true
 mask_predictor:
-  num_channels: 64
+  num_channels: 128
   kernel_size: 5
   stride: 2
   padding: 2

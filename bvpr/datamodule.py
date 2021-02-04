@@ -17,10 +17,6 @@ class SegmentationDataModule(pl.LightningDataModule):
         normalizer = ts.Normalize(
             mean=[0.485, 0.456, 0.406],
             std=[0.229, 0.224, 0.225])
-        if config["model"]["image_encoder"]["name"] == "deeplab":
-            normalizer = ts.Normalize(
-                mean=[0.40787, 0.45752, 0.48107],
-                std=[1.0, 1.0, 1.0])   
 
         train_image_dim = config["image_size"]
         val_image_dim = MAX_IMAGE_SIZE
@@ -81,13 +77,14 @@ class SegmentationDataModule(pl.LightningDataModule):
     def train_dataloader(self):
         return DataLoader(
             self.train_data,
-            shuffle=False,
+            shuffle=True,
             collate_fn=collate_fn,
             **self.config["loader"])
-        
+
     def val_dataloader(self):
         return DataLoader(
             self.val_data,
+            shuffle=False,
             collate_fn=collate_fn,
             **self.config["loader"])
 
