@@ -1,5 +1,5 @@
 # @package _group_
-architecture: LSTMCNNBaseline
+architecture: SegmentationModel
 multiscale: true
 use_location_embeddings: true
 text_encoder:
@@ -10,10 +10,21 @@ text_encoder:
   glove: true
   dropout: 0.2
 image_encoder:
-  name: resnet50
+  name: deeplabv3
   num_layers: 4
   pretrained: true
   freeze: true
+multimodal_encoder:
+  topdown: true
+  bottomup: true
+  num_layers: 4
+  num_kernels: 128
+  connected: true
+  kernel_size: 5
+  stride: 2
+  dilation: 1
+  text_kernel_size: 1  
+  layer: "conv"  # or film
 mask_predictor:
   num_channels: 128
   kernel_size: 5

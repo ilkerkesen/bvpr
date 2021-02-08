@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
@@ -29,7 +30,10 @@ class IoULoss(nn.Module):
         super().__init__()
         self.size_average = size_average
 
-    def forward(self, input, target, mask=None):
+    def forward(self, input, target, size=None):
+        if size is not None:
+            mask = make_mask(size, target.size()[-2:])
+            input[~mask] = 0
         intersection = (input * target).sum()
         union = ((input + target) - (input * target)).sum()
         iou = intersection / union
@@ -69,12 +73,15 @@ class MaskedBCEWithLogitsLoss(nn.BCEWithLogitsLoss):
         self.ignore_index = ignore_index
 
     def forward(self, input, target, size=None):
-        ypred, ygold = input, target
         if size is not None:
-            mask = make_mask(size, ygold.size()[-2:])
-            ypred, ygold = input[mask], target[mask]
+            mask = make_mask(size, target.size()[-2:])
+            input, target = input[mask], target[mask]
         return F.binary_cross_entropy_with_logits(
-            ypred, ygold, weight=self.weight, reduction=self.reduction)
+            input,
+            target,
+            weight=self.weight,
+            reduction=self.reduction,
+        )
 
 
 class MaskedMultiScaleBCELoss(nn.BCELoss):

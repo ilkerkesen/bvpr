@@ -2,6 +2,7 @@ import os
 import os.path as osp
 from copy import deepcopy
 
+import numpy as np
 import torch
 import pytorch_lightning as pl
 
@@ -13,8 +14,18 @@ __all__ = (
 
 def process_config(cfg, dataset):
     cfg = deepcopy(cfg)
+    encoder = cfg["image_encoder"]["name"]
+    encoder_num_layers = cfg["image_encoder"]["num_layers"]
+    predictor_num_layers = 3
+    if encoder == "deeplabv3":
+        if encoder_num_layers < 3:
+            predictor_num_layers = 2
+        elif encoder_num_layers < 5:
+            predictor_num_layers = 3
+    elif encoder == "resnet18":
+        predictor_num_layers = encoder_num_layers + 1
     cfg["text_encoder"]["corpus"] = dataset.corpus
-    cfg["mask_predictor"]["num_layers"] = cfg["image_encoder"]["num_layers"]
+    cfg["mask_predictor"]["num_layers"] = predictor_num_layers
     return cfg
 
 
@@ -44,3 +55,81 @@ def create_callbacks(config, log_dir):
         raise Exception("ckpt does not exist at {}".format(ckpt_path))
 
     return [checkpoint_callback], ckpt_path
+
+
+def generate_spatial_batch(featmap_H, featmap_W):
+    """Generate additional visual coordinates feature maps.
+    Function taken from
+    https://github.com/chenxi116/TF-phrasecut-public/blob/master/util/processing_tools.py#L5
+    and slightly modified
+    """
+
+    spatial_batch_val = np.zeros(
+        (1, 8, featmap_H, featmap_W), dtype=np.float32)
+    for h in range(featmap_H):
+        for w in range(featmap_W):
+            xmin = w / featmap_W * 2 - 1
+            xmax = (w + 1) / featmap_W * 2 - 1
+            xctr = (xmin + xmax) / 2
+            ymin = h / featmap_H * 2 - 1
+            ymax = (h + 1) / featmap_H * 2 - 1
+            yctr = (ymin + ymax) / 2
+            spatial_batch_val[0, :, h, w] = (
+                [xmin, ymin, xmax, ymax,
+                xctr, yctr, 1 / featmap_W, 1 / featmap_H])
+    return torch.from_numpy(spatial_batch_val)
+
+
+def make_batch_location_embeddings(size, mapsize):
+    B = size.shape[0]
+    locs = []
+    for i in range(B):
+        # locs.append(make_instance_location_embeddings(size[i,:], mapsize))
+        locs.append(generate_spatial_batch(mapsize[0], mapsize[1]))
+    return torch.cat(locs, 0).float()
+
+
+def add_batch_location_embeddings(vis, size):
+    mapsize = vis.size()[-2:]
+    loc = make_batch_location_embeddings(size, mapsize)
+    loc = loc.to(vis.device)
+    return torch.cat((vis, loc), 1)
+
+  
+def scale2size(scale, tensor_size):
+    tensor_h, tensor_w = tensor_size
+    scale_h, scale_w = scale
+    scaled_h, scaled_w = scale_h * tensor_h, scale_w * tensor_w
+    return torch.round(torch.tensor([[scaled_h, scaled_w]])).int()
+
+
+def scales2sizes(scales, tensor_size):
+    processed_size = tensor_size[-2:]
+    batch_size = tensor_size[0]
+    sizes = [scale2size(scales[i], processed_size) for i in range(batch_size)]
+    sizes = torch.cat(sizes, 0)
+    return sizes
+
+
+def sizes2scales(sizes, tensor_size):
+    processed_size = tensor_size[-2:]
+    batch_size = tensor_size[0]
+    scales = [size2scale(
+        sizes[i], processed_size) for i in range(batch_size)]
+    scales = torch.cat(scales, 0)
+    return scales
+
+
+def size2scale(raw_size, processed_size):
+    im_h, im_w = raw_size[0].item(), raw_size[1].item()
+    new_h, new_w = processed_size
+    if new_h >= im_h and new_w >= im_w:
+        ratio_h = im_h / float(new_h)
+        ratio_w = im_w / float(new_w)
+    elif im_h >= im_w:
+        ratio_h = 1.0
+        ratio_w = ((new_h / float(im_h)) * im_w) / new_w
+    else:
+        ratio_w = 1.0
+        ratio_h = ((new_w / float(im_w)) * im_h) / new_h
+    return torch.tensor([[ratio_h, ratio_w]])

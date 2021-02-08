@@ -2,7 +2,7 @@ seed: 1
 image_size: 512
 
 defaults:
-  - model: Baseline
+  - model: SegmentationModel
   - dataset: UNC
   - optimizer: Adam
   - scheduler: ReduceLROnPlateau
@@ -25,11 +25,11 @@ logger:
 
 # checkpoint
 checkpoint:
-  save_top_k: 1
+  save_top_k: 3
   save_last: true
   verbose: true
-  monitor: "val_loss"
-  mode: "min"
+  monitor: "cum_IoU"
+  mode: "max"
   prefix: ""
   filepath: null
 

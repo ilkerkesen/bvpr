@@ -38,11 +38,12 @@ class SegmentationExperiment(LightningModule):
         image, text, size, target = batch
         predicted = self(image, text, size=size)
         loss = self.criterion(predicted, target, size)
-        
+
         if isinstance(predicted, tuple) or isinstance(predicted, list):
             predicted = predicted[-1]
+        predicted = torch.sigmoid(predicted)
 
-        I, U = compute_thresholded(predicted, target, self.thresholds)
+        I, U = compute_thresholded(predicted, target, self.thresholds, size)
         B = image.size(0)
         return {
             "loss": loss,
@@ -72,9 +73,20 @@ class SegmentationExperiment(LightningModule):
             num_correct += torch.sum(this_IoU >= self.IoU_thresholds, dim=0)
 
         precision = num_correct / num_instances
-        cum_IoU = cum_I / cum_U
-        mIoU = total_IoU / num_instances
+        cum_IoU = 100*(cum_I / cum_U)
+        mIoU = 100*(total_IoU / num_instances)
+
+        IoU = cum_IoU  # FIXME: add option for this
+        threshold_idx = IoU.argmax().item()
+        threshold_val = self.thresholds[threshold_idx]
+        this_precision = precision[threshold_idx].tolist()
+
         self.log("val_loss", total_loss / num_instances)
+        self.log("threshold", threshold_val)
+        self.log("mIoU", mIoU[threshold_idx].item(), prog_bar=True)
+        self.log("cum_IoU", cum_IoU[threshold_idx].item())
+        for (th, pr) in zip(self.IoU_thresholds.tolist()[0], this_precision):
+            self.log("precision@{:.2f}".format(th), pr)
 
     def test_step(self, batch, batch_index):
         pass
@@ -91,7 +103,7 @@ class SegmentationExperiment(LightningModule):
 
         if self.config.get("scheduler") is None:
             return optimizers, []
-       
+
         scheduler = eval("torch.optim.lr_scheduler.{}".format(
             self.config["scheduler"]["method"]))
         schedulers = [{
@@ -102,4 +114,4 @@ class SegmentationExperiment(LightningModule):
             "frequency": 1,
             "strict": True,
         }]
-        return optimizers, schedulers  
+        return optimizers, schedulers
