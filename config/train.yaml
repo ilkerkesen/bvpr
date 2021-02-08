@@ -25,10 +25,10 @@ logger:
 
 # checkpoint
 checkpoint:
-  save_top_k: 1
+  save_top_k: 3
   save_last: true
   verbose: true
-  monitor: "mIoU"
+  monitor: "cum_IoU"
   mode: "max"
   prefix: ""
   filepath: null

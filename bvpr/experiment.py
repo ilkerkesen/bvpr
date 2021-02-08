@@ -76,7 +76,7 @@ class SegmentationExperiment(LightningModule):
         cum_IoU = 100*(cum_I / cum_U)
         mIoU = 100*(total_IoU / num_instances)
 
-        IoU = mIoU  # FIXME: add option for this
+        IoU = cum_IoU  # FIXME: add option for this
         threshold_idx = IoU.argmax().item()
         threshold_val = self.thresholds[threshold_idx]
         this_precision = precision[threshold_idx].tolist()

@@ -285,6 +285,22 @@ class ImageEncoder(nn.Module):
         self.num_channels = 256 * 2**(config["num_layers"]-1)
         self.num_channels += 8 * self.use_location_embeddings
 
+    def setup_deeplabv2(self, config):
+        import pdb; pdb.set_trace()
+        model = torch.hub.load(
+            "kazuto1011/deeplab-pytorch",
+            "deeplabv2_resnet101",
+            pretrained='voc12',
+            n_classes=21,
+        )
+        layers = list(list(model.children())[0].children())
+        num_layers = config["num_layers"]
+        self.model = nn.Sequential(*layers[:1+num_layers])
+        self.num_downsample = 2 + int(num_layers > 2)
+        self.num_channels = 256 * 2**(num_layers-1)
+        self.num_channels += 8 * self.use_location_embeddings
+        self.ceil_mode = True
+
     def setup_deeplabv3(self, config):
         model = torch.hub.load(
             'pytorch/vision:v0.6.0',
@@ -368,8 +384,8 @@ class BottomUpEncoder(nn.Module):
                    out_channels=num_channels,
                    text_dim=text_dim,
                    kernel_size=config["text_kernel_size"],
-                   stride=1,  # FIXME: config["stride"],
-                   padding=0,  # FIXME: config["padding"],
+                   stride=1,  # FIXME
+                   padding=config["text_kernel_size"] // 2,  # FIXME
                    dilation=config["dilation"],
                 ))
 
@@ -426,8 +442,8 @@ class TopDownEncoder(nn.Module):
                    out_channels=config["num_kernels"],
                    text_dim=text_dim,
                    kernel_size=config["text_kernel_size"],
-                   stride=1,  # FIXME: config["stride"],
-                   padding=0,  # FIXME: config["padding"],
+                   stride=1,  # FIXME
+                   padding=config["text_kernel_size"] // 2,  # FIXME
                    dilation=config["dilation"],
                ))
 
