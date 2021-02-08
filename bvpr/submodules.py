@@ -11,6 +11,7 @@ from torchvision.transforms import Normalize
 from torchtext.vocab import GloVe
 
 from bvpr.util import add_batch_location_embeddings
+from bvpr.extra import deeplab
 
 
 GLOVE_DIM = 300
@@ -285,21 +286,19 @@ class ImageEncoder(nn.Module):
         self.num_channels = 256 * 2**(config["num_layers"]-1)
         self.num_channels += 8 * self.use_location_embeddings
 
-    def setup_deeplabv2(self, config):
-        import pdb; pdb.set_trace()
-        model = torch.hub.load(
-            "kazuto1011/deeplab-pytorch",
-            "deeplabv2_resnet101",
-            pretrained='voc12',
-            n_classes=21,
-        )
-        layers = list(list(model.children())[0].children())
+    def setup_deeplabv3plus_resnet50(self, config):
+        cache_dir = osp.abspath(osp.expanduser("~/.cache/torch/checkpoints"))
+        filename = "best_deeplabv3plus_resnet50_voc_os16.pth"
+        filepath = osp.join(cache_dir, filename)
+        ckpt = torch.load(filepath)
+        model = deeplab.deeplabv3plus_resnet50()
+        model.load_state_dict(ckpt["model_state"])
+        layers = list(model.backbone.children())
         num_layers = config["num_layers"]
-        self.model = nn.Sequential(*layers[:1+num_layers])
+        self.model = nn.Sequential(*layers[:4+num_layers])
         self.num_downsample = 2 + int(num_layers > 2)
         self.num_channels = 256 * 2**(num_layers-1)
         self.num_channels += 8 * self.use_location_embeddings
-        self.ceil_mode = True
 
     def setup_deeplabv3(self, config):
         model = torch.hub.load(
