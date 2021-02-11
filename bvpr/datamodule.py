@@ -5,6 +5,7 @@ import pytorch_lightning as pl
 
 from bvpr.data.transform import PadBottomRight, DownsizeImage
 from bvpr.data.refexp import ReferDataset
+from bvpr.data.colorization import ColorizationDataset
 
 
 MAX_IMAGE_SIZE = 640
@@ -106,3 +107,35 @@ def collate_fn(unsorted_batch):
         sent = bi[-1]
         text[-len(sent):, i] = sent
     return img.float(), text, size, mask.float()
+
+
+class ColorizationDataModule(pl.LightningDataModule):
+    def __init__(self, config):
+        super().__init__()
+
+        self.train_data
+
+    def setup(self, stage=None):
+        pass
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_data,
+            shuffle=True,
+            collate_fn=colorization_collate_fn,
+            **self.config["loader"],
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_data,
+            collate_fn=colorization_collate_fn,
+            **self.config["loader"],
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_data,
+            collate_fn=colorization_collate_fn,
+            **self.config["loader"],
+        )
