@@ -1,3 +1,6 @@
+import os
+import os.path as osp
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,19 +13,46 @@ from bvpr.criterion import *
 from bvpr.evaluation import *
 
 
-class SegmentationExperiment(LightningModule):
-    """Lightning Module for Segmentation Experiments"""
+class BaseExperiment(LightningModule):
     def __init__(self, config):
         super().__init__()
         self.model = eval(config["model"]["architecture"])(config["model"])
         self.criterion = eval(config["criterion"])()
-        self.thresholds = torch.arange(0, 1, step=0.05).tolist()
-        self.IoU_thresholds = torch.arange(0.5, 1.0, 0.1).reshape(1, -1)
         self.save_hyperparameters(config)
         self.config = config
 
     def forward(self, *args, **kwargs):
         return self.model(*args, **kwargs) 
+
+    def configure_optimizers(self):
+        optimizer = eval("torch.optim.{}".format(
+            self.config["optimizer"]["method"]))
+        optimizers = [optimizer(
+            self.model.parameters(),
+            **self.config["optimizer"]["params"])]
+
+        if self.config.get("scheduler") is None:
+            return optimizers, []
+
+        scheduler = eval("torch.optim.lr_scheduler.{}".format(
+            self.config["scheduler"]["method"]))
+        schedulers = [{
+            "scheduler": scheduler(
+                optimizers[0], **self.config["scheduler"]["params"]),
+            "monitor": "val_loss",
+            "interval": "epoch",
+            "frequency": 1,
+            "strict": True,
+        }]
+        return optimizers, schedulers
+
+
+class SegmentationExperiment(BaseExperiment):
+    """Lightning Module for Segmentation Experiments"""
+    def __init__(self, config):
+        super().__init__(config)
+        self.thresholds = torch.arange(0, 1, step=0.05).tolist()
+        self.IoU_thresholds = torch.arange(0.5, 1.0, 0.1).reshape(1, -1)
 
     def training_step(self, batch, batch_index):
         image, text, size, target = batch
@@ -88,30 +118,37 @@ class SegmentationExperiment(LightningModule):
         for (th, pr) in zip(self.IoU_thresholds.tolist()[0], this_precision):
             self.log("precision@{:.2f}".format(th), pr)
 
-    def test_step(self, batch, batch_index):
-        pass
+    def test_step(self, batch, batch_index, dataloader_idx):
+        outputs = [] # idx, split, phrase, intersection, union, IoU
+        data = self.test_dataloader()[dataloader_idx].dataset
+        split = data.split
+        index2word = self.model.text_encoder.config["corpus"].dictionary.idx2word
+        image, text, size, target = batch
+        predicted = self(image, text, size=size)
+
+        if isinstance(predicted, tuple) or isinstance(predicted, list):
+            predicted = predicted[-1]
+        predicted = torch.sigmoid(predicted)
+        threshold = self.config["threshold"]
+        thresholded = (predicted > threshold).float().data
+        intersection, union = compute_iou(thresholded, target, size)
+        intersection, union = intersection.tolist(), union.tolist()
+
+        batch_size = self.test_dataloader()[dataloader_idx].batch_size
+        for i in range(len(intersection)):
+            word_indices = text[:, i].tolist()
+            words = [index2word[index] for index in word_indices if index > 0]
+            sentence = " ".join(words)
+            I, U = intersection[i], union[i]
+            index = str(batch_index * batch_size + i)
+            outputs.append((index, split, sentence, I, U, I / U))
+        return outputs
 
     def test_epoch_end(self, outputs):
-        pass
-
-    def configure_optimizers(self):
-        optimizer = eval("torch.optim.{}".format(
-            self.config["optimizer"]["method"]))
-        optimizers = [optimizer(
-            self.model.parameters(),
-            **self.config["optimizer"]["params"])]
-
-        if self.config.get("scheduler") is None:
-            return optimizers, []
-
-        scheduler = eval("torch.optim.lr_scheduler.{}".format(
-            self.config["scheduler"]["method"]))
-        schedulers = [{
-            "scheduler": scheduler(
-                optimizers[0], **self.config["scheduler"]["params"]),
-            "monitor": "val_loss",
-            "interval": "epoch",
-            "frequency": 1,
-            "strict": True,
-        }]
-        return optimizers, schedulers
+        output_file = osp.abspath(osp.expanduser(self.config["output"]))
+        with open(output_file, "w") as f:
+            for dataset_outputs in outputs:
+                for batch_outputs in dataset_outputs:
+                    lines = [",".join([str(x) for x in output]) + "\n"
+                             for output in batch_outputs]
+                    f.writelines(lines)

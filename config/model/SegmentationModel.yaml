@@ -10,7 +10,7 @@ text_encoder:
   glove: true
   dropout: 0.2
 image_encoder:
-  name: deeplabv3
+  name: deeplabv3plus_resnet50
   num_layers: 4
   pretrained: true
   freeze: true
