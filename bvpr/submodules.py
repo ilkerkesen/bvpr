@@ -189,7 +189,7 @@ class LSTMEncoder(nn.Module):
 
 
 class MaskPredictor(nn.Module):
-    def __init__(self, config, in_channels, num_layers, multiscale):
+    def __init__(self, config, in_channels, num_layers, multiscale, num_classes=1):
         super().__init__()
         self.layers  = nn.ModuleList()
         self.loss_output_layers = nn.ModuleList()
@@ -201,6 +201,7 @@ class MaskPredictor(nn.Module):
         self.config = config
         self.multiscale = multiscale
         self.num_layers = num_layers
+        self.num_classes = 1
 
         for i in range(num_layers-1):
             _in_channels = config["num_channels"] if i > 0 else in_channels
@@ -212,7 +213,7 @@ class MaskPredictor(nn.Module):
             self.loss_output_layers.append(
                 nn.ConvTranspose2d(
                     in_channels=config["num_channels"],
-                    out_channels=1,
+                    out_channels=self.num_classes,
                     kernel_size=1,
                     stride=1,
                     padding=0,    
@@ -221,7 +222,7 @@ class MaskPredictor(nn.Module):
             nn.ConvTranspose2d(
                 **layer_kwargs,
                 in_channels=config["num_channels"],
-                out_channels=1))
+                out_channels=self.num_classes))
 
     def forward(self, x, image_size=None):
         B, _, _, _ = x.size()
@@ -300,19 +301,6 @@ class ImageEncoder(nn.Module):
         self.num_channels = 256 * 2**(num_layers-1)
         self.num_channels += 8 * self.use_location_embeddings
 
-    def setup_deeplabv3(self, config):
-        model = torch.hub.load(
-            'pytorch/vision:v0.6.0',
-            'deeplabv3_resnet101',
-            pretrained=True,
-        )
-        layers = list(model.backbone.children())
-        num_layers = config["num_layers"]
-        self.model = nn.Sequential(*layers[:4+num_layers])
-        self.num_downsample = 2 + int(num_layers > 2)
-        self.num_channels = 256 * 2**(num_layers-1)
-        self.num_channels += 8 * self.use_location_embeddings
-
     def forward(self, x, size=None):
         y = self.model(x)
         if self.use_location_embeddings:
@@ -370,7 +358,10 @@ class BottomUpEncoder(nn.Module):
 
         # setup conditional layers (text kernels, FiLM, or nothing)
         self.conditional_layers = nn.ModuleList()
-        layer_func = self.LAYER_DICT.get(config["layer"], UnconditionalLayer)
+        if self.use_language:
+            layer_func = self.LAYER_DICT[config["layer"]]
+        else:
+            layer_func = UnconditionalLayer
         in_channels, num_kernels = config["in_channels"], config["num_kernels"]
         for i in range(config["num_layers"]):
             text_dim = config["text_embedding_dim"] // config["num_layers"]
@@ -430,7 +421,10 @@ class TopDownEncoder(nn.Module):
 
         # setup conditional layers
         self.conditional_layers = nn.ModuleList()       
-        layer_func = self.LAYER_DICT.get(config["layer"], UnconditionalLayer)
+        if self.use_language:
+            layer_func = self.LAYER_DICT[config["layer"]]
+        else:
+            layer_func = UnconditionalLayer
         for i in range(config["num_layers"]):
             text_dim = config["text_embedding_dim"] // config["num_layers"]
             if i == config["num_layers"]:

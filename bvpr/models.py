@@ -43,6 +43,8 @@ class LSTMCNNBaseline(nn.Module):
 
 
 class SegmentationModel(nn.Module):
+    NUM_CLASSES = 1
+    
     """Our main model."""
     def __init__(self, config):
         super().__init__()
@@ -63,6 +65,7 @@ class SegmentationModel(nn.Module):
             in_channels=config["multimodal_encoder"]["num_kernels"],
             num_layers=self.image_encoder.num_downsample,
             multiscale=config["multiscale"],
+            num_classes=self.NUM_CLASSES,
         )
         self.config = config
 
@@ -78,3 +81,7 @@ class SegmentationModel(nn.Module):
         joint = self.multimodal_encoder(vis, txt, scale)
         outputs = self.mask_predictor(joint, image_size=image.shape)
         return outputs
+
+
+class ColorizationModel(SegmentationModel):
+    NUM_CLASSES = 3
