@@ -1,16 +1,16 @@
 name: bvpr
-channels:
-  - defaults
-  - conda-forge
 dependencies:
   - python=3.8
   - ipython=7.16
   - pip=20.1
   - cython=0.29.21
   - jedi=0.17.1
+  - numpy=1.19.2
   - pip:
       - --find-links https://download.pytorch.org/whl/torch_stable.html
       - -r requirements.txt 
       - -e .
       - ipdb
       - hydra-core
+      - spacy
+      - git+https://github.com/andfoy/refer.git

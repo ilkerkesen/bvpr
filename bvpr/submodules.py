@@ -216,7 +216,7 @@ class MaskPredictor(nn.Module):
                     out_channels=self.num_classes,
                     kernel_size=1,
                     stride=1,
-                    padding=0,    
+                    padding=0,
                 ))
         self.layers.append(
             nn.ConvTranspose2d(
@@ -322,7 +322,7 @@ class MultimodalEncoder(nn.Module):
         hidden = textual[1][0].squeeze(0)
         hidden_size = self.config["text_embedding_dim"] // self.config["num_layers"]
         parted = [
-            hidden[:, i*hidden_size:(i+1)*hidden_size] 
+            hidden[:, i*hidden_size:(i+1)*hidden_size]
             for i in range(self.config["num_layers"])
         ]
         y = self.bottom_up(visual, parted, scale)
@@ -339,6 +339,7 @@ class BottomUpEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.use_language = config["bottomup"]
+        self.top_down = config["topdown"]
 
         # setup layers (Conv2d->BatchNorm2d->ReLU)
         self.layers = nn.ModuleList()
@@ -379,16 +380,45 @@ class BottomUpEncoder(nn.Module):
                    dilation=config["dilation"],
                 ))
 
+        # to prevent information leakage in case of only bottom-up processing
+        if config["bottomup"] and not config["topdown"]:
+            self.visual_layers = nn.ModuleList()
+            for i in range(config["num_layers"]-1):
+                in_channels = out_channels = config["num_kernels"]
+                if i == 0:
+                    in_channels = config["in_channels"]
+                self.visual_layers.append(
+                    CBR(
+                        in_channels=in_channels,
+                        out_channels=out_channels,
+                        kernel_size=config["kernel_size"],
+                        stride=config["stride"],
+                        padding=config["kernel_size"] // 2,
+                        # dilation=config["dilation"],
+                    ))
+
         self.config = deepcopy(config)
 
     def forward(self, vis, txt, scale):
         packed = zip(txt, self.layers, self.conditional_layers)
-        outputs = [vis]
+        num_layers = len(self.layers)
+        outputs, visual_branch = [vis], [vis]
         for i, (embedding, layer, conditional_layer) in enumerate(packed):
             previous = outputs[-1]
             feature_map = conditional_layer(previous, embedding)
             feature_map = layer(torch.cat([previous, feature_map], dim=1))
             outputs.append(feature_map)
+
+            # to prevent leakage in case of only bottom-up processing
+            if i > num_layers-2:
+                continue
+            if not self.config["topdown"] and self.config["bottomup"]:
+                visual_layer = self.visual_layers[i]
+                visual_feature_map = visual_layer(visual_branch[-1])
+                visual_branch.append(visual_feature_map)
+
+        if not self.config["topdown"] and self.config["bottomup"]:
+            outputs = visual_branch + [outputs[-1]]
         return outputs
 
 
@@ -420,7 +450,7 @@ class TopDownEncoder(nn.Module):
             )
 
         # setup conditional layers
-        self.conditional_layers = nn.ModuleList()       
+        self.conditional_layers = nn.ModuleList()
         if self.use_language:
             layer_func = self.LAYER_DICT[config["layer"]]
         else:
