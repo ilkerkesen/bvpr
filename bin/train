@@ -40,7 +40,9 @@ def main(config):
     config["logger"]["save_dir"] = osp.abspath(
         osp.expanduser(config["logger"]["save_dir"]))
     if config["logger"]["name"] is None:
-        config["logger"]["name"] = config["model"]["architecture"]
+        architecture = config["model"]["architecture"]
+        dataset = config["dataset"]["dataset"]
+        config["logger"]["name"] = f"{architecture}-{dataset}"
     logger = pl.loggers.TensorBoardLogger(**config["logger"])
 
     # checkpoint
