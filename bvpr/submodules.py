@@ -91,7 +91,7 @@ class CBRTranspose(nn.Module):
 
 
 class FiLMLayer(nn.Module):
-    def __init__(self, in_features, out_features, embedding_dim):
+    def __init__(self, in_features, out_features, embedding_dim, **kwargs):
         super().__init__()
         self.dense = nn.Linear(embedding_dim, in_features)
         self.gamma_layer = nn.Linear(in_features, out_features)
@@ -361,6 +361,12 @@ class BottomUpEncoder(nn.Module):
         self.conditional_layers = nn.ModuleList()
         if self.use_language:
             layer_func = self.LAYER_DICT[config["layer"]]
+            conv_args = {
+                "kernel_size": config["text_kernel_size"],
+                "stride": 1,
+                "padding": config["text_kernel_size"] // 2,
+                "dilation": config["dilation"],
+            }
         else:
             layer_func = UnconditionalLayer
         in_channels, num_kernels = config["in_channels"], config["num_kernels"]
@@ -371,9 +377,9 @@ class BottomUpEncoder(nn.Module):
             num_channels = in_channels if i == 0 else num_kernels
             self.conditional_layers.append(
                 layer_func(
-                   in_channels=num_channels,
-                   out_channels=num_channels,
-                   text_dim=text_dim,
+                   num_channels, # in_channels/in_features
+                   num_channels, # out_channels/out_features
+                   text_dim,
                    kernel_size=config["text_kernel_size"],
                    stride=1,  # FIXME
                    padding=config["text_kernel_size"] // 2,  # FIXME
@@ -461,9 +467,9 @@ class TopDownEncoder(nn.Module):
                 text_dim = config["text_embedding_dim"] % text_dim
             self.conditional_layers.append(
                layer_func(
-                   in_channels=config["num_kernels"],
-                   out_channels=config["num_kernels"],
-                   text_dim=text_dim,
+                   config["num_kernels"],
+                   config["num_kernels"],
+                   text_dim,
                    kernel_size=config["text_kernel_size"],
                    stride=1,  # FIXME
                    padding=config["text_kernel_size"] // 2,  # FIXME
