@@ -18,7 +18,7 @@ class SegmentationDataModule(pl.LightningDataModule):
         "referit": ("test",),
         "gref": ("val",),
     }
-    
+
     def __init__(self, config):
         super().__init__()
 

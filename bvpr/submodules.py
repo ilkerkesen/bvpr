@@ -25,8 +25,14 @@ __all__ = (
 )
 
 
-def get_glove_vectors(corpus):
-    glove = GloVe(name='840B', dim=300) #, cache=glove_cache)
+def get_glove_cache():
+    path = osp.split(osp.realpath(__file__))[0]
+    path = osp.abspath(osp.join(path, "..", ".vector_cache"))
+    return path
+
+
+def get_glove_vectors(corpus, cache=get_glove_cache()):
+    glove = GloVe(name='840B', dim=300, cache=cache) 
     vectors = np.zeros((len(corpus.dictionary), 300))
     count = 0
     for word, idx in corpus.dictionary.word2idx.items():
