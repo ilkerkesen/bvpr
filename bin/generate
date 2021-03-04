@@ -1,20 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import os
 import os.path as osp
-from copy import deepcopy
 
 import torch
-import torch.nn as nn
-from torch.nn import functional as F
-from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 import hydra
 from omegaconf import OmegaConf
-
-from bvpr.util import process_config, create_callbacks
-from bvpr.models import LSTMCNNBaseline
+from bvpr.util import process_config
 from bvpr.data.refexp import ReferDataset as Dataset
 from bvpr.experiment import SegmentationExperiment as Experiment
 from bvpr.datamodule import SegmentationDataModule as DataModule
@@ -48,9 +41,8 @@ def main(config):
         logger=None,
         callbacks=None,
         **config["trainer"],
-    ) 
+    )
     trainer.test(experiment, datamodule=datamodule)
-
 
 
 if __name__ == "__main__":
