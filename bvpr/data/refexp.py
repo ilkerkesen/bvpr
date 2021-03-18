@@ -9,15 +9,9 @@ https://github.com/chenxi116/TF-phrasecut-public/blob/master/build_batches.py
 """
 
 import os
-import sys
-from urllib.request import urlretrieve, urlopen
-from urllib.error import HTTPError, URLError
-import tempfile
 from skimage import io
 from skimage.transform import resize
 import json
-import csv
-import uuid
 import tqdm
 import torch
 import numpy as np
@@ -27,12 +21,8 @@ from referit import REFER
 import torch.utils.data as data
 from referit.refer import mask as cocomask
 from bvpr.data.corpus import Corpus
-from pathlib import Path
 
 import cv2
-import requests
-from PIL import Image
-from io import BytesIO
 
 
 class DatasetNotFoundError(Exception):

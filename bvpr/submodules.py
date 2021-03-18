@@ -333,7 +333,7 @@ class MultimodalEncoder(nn.Module):
         ]
         y = self.bottom_up(visual, parted, scale)
         y = self.top_down(y, parted)
-        return y
+        return y[-1]
 
 
 class BottomUpEncoder(nn.Module):
@@ -484,19 +484,21 @@ class TopDownEncoder(nn.Module):
 
         self.config = deepcopy(config)
 
-    def forward(self, outputs, txt):
-        output = None
+    def forward(self, bottom_up_outputs, txt):
+        output, top_down_outputs = None, []
         packed = zip(txt[::-1], self.layers, self.conditional_layers)
         for i, (embedding, layer, conditional_layer) in enumerate(packed):
             j = -i-1
-            bottomup_output, output_size = outputs[j], outputs[j-1].size()
+            bottomup_output = bottom_up_outputs[j]
+            output_size = bottom_up_outputs[j-1].size()
             B, C, H, W = bottomup_output.size()
             feature_map = conditional_layer(bottomup_output, embedding)
             input = feature_map
             if i != 0:
                 input = torch.cat([output, feature_map], dim=1)
             output = layer(input, output_size=output_size)
-        return output
+            top_down_outputs.append(output)
+        return top_down_outputs
 
 
 class UnconditionalLayer(nn.Module):
