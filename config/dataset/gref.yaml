@@ -1,0 +1,3 @@
+# @package _group_
+dataset: gref
+data_root: "~/data/refexp/data"

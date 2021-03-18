@@ -4,6 +4,7 @@ from copy import deepcopy
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import ImageGrid
 import torch
+import torch.nn.functional as F
 import numpy as np
 from scipy.spatial.distance import euclidean, cosine
 
@@ -11,6 +12,7 @@ from bvpr import data
 from bvpr.util import process_config
 from bvpr.models import SegmentationModel as Model
 from bvpr.datamodule import SegmentationDataModule as DataModule
+from bvpr.util import sizes2scales, scales2sizes
 
 DATASET_NAME = "unc"
 DATASET_PATH = "~/data/refexp/data"
@@ -207,3 +209,162 @@ class LanguageFiltersDemo(SegmentationDemo):
 
     def to_numpy(self, tensors):
         return [t.detach().cpu().numpy() for t in tensors]
+
+
+class MaximumActivatedPatchesDemo(SegmentationDemo):
+    def visualize(self, example_id, datasplit_id=0, custom_phrase=None,
+                  thresholded=False):
+        test_data = self.data_module.test_datasplits[datasplit_id]
+        image, phrase, size, gold = self.get_data(
+            example_id,
+            datasplit_id,
+            custom_phrase)
+        img = test_data.transform(image).to(self.device).unsqueeze(0)
+        txt = test_data.tokenize_phrase(phrase).to(self.device).unsqueeze(1)
+        size = size.unsqueeze(0)
+
+        model = self.model
+        scale = sizes2scales(size, img.size())
+        vis = model.image_encoder(img, scales2sizes(scale, img.size()))
+        txt_ = model.text_encoder(txt)
+        txt_ = txt_[1][0].squeeze(0)
+        num_layers = model.multimodal_encoder.config["num_layers"]
+        text_dim = model.multimodal_encoder.config["text_embedding_dim"]
+        hidden_size = text_dim // num_layers
+        parted = [
+            txt_[:, i*hidden_size:(i+1)*hidden_size]
+            for i in range(num_layers)
+        ]
+        bottom_up_outputs = model.multimodal_encoder.bottom_up(vis, parted, scale)
+        top_down_outputs = model.multimodal_encoder.top_down(bottom_up_outputs, parted)
+        bottom_up_outputs = [self.get_attention_map(x, size, thresholded=thresholded)
+                             for x in bottom_up_outputs]
+        top_down_outputs = [self.get_attention_map(x, size, thresholded=thresholded)
+                           for x in top_down_outputs][::-1]
+        # top_down_outputs.append(bottom_up_outputs[-1])
+
+        scale = 15.
+        fig = plt.figure(figsize=(3 * scale, scale))
+        grid = ImageGrid(
+            fig, 111, nrows_ncols=(1+len(bottom_up_outputs), 3), direction="column", axes_pad=(0.1, 0.3))
+
+
+        images = [("image", image)]
+        for i, output in enumerate(bottom_up_outputs):
+            images.append((f"bottom-up #{i}", output))
+        images.append(("predicted mask", self.predict(img, txt, size)))
+        for i, output in enumerate(top_down_outputs):
+            images.append((f"top-down #{i}", output))
+        images.append(("true mask", gold))
+        for ax in grid:
+            ax.axis('off')
+        for ax, (title, im) in zip(grid, images):
+            ax.axis('off')
+            ax.set_title(title)
+            ax.imshow(im)
+        plt.show()
+        print(f"phrase: {phrase}")
+
+    def get_attention_map(self, feature_map, size, thresholded=False):
+        image_size = self.data_module.config["image_size"]
+        predicted = feature_map.sum(dim=1).unsqueeze(0)
+        predicted = F.interpolate(predicted, image_size)
+        predicted = predicted.view(image_size, image_size)
+        h, w = size.flatten().numpy()
+        predicted = predicted[:h, :w]
+        if thresholded:
+            predicted = predicted >= self.threshold
+        return predicted.float().detach().cpu()
+
+
+class WordRemovalActivationDemo(SegmentationDemo):
+    def visualize(self, example_id, datasplit_id=0, custom_phrase=None,
+                  thresholded=False, method="remove"):
+        test_data = self.data_module.test_datasplits[datasplit_id]
+        image, phrase, size, gold = self.get_data(
+            example_id,
+            datasplit_id,
+            custom_phrase)
+        img = test_data.transform(image).to(self.device).unsqueeze(0)
+        txt = test_data.tokenize_phrase(phrase).to(self.device).unsqueeze(1)
+        size = size.unsqueeze(0)
+        
+        phrases = []
+        for idx in range(len(phrase.split())):
+            this = phrase.split()
+            if method == "replace":
+                this[idx] = "UNK"
+            elif method == "remove":
+                this.pop(idx) 
+            this = " ".join(this)
+            if this == "":
+                this = "UNK"
+            phrases.append(this)
+        
+
+        bu, td = self.generate_feature_maps(img, phrase, size, datasplit_id)
+        heatmaps = np.empty((2, len(bu), len(phrases)), dtype=object)
+        for i, phrase_ in enumerate(phrases):
+            bu_, td_ = self.generate_feature_maps(img, phrase_, size, datasplit_id)
+            bu_diff = [self.process_differences(o, o_, size) for (o,o_) in zip(bu, bu_)]
+            td_diff = [self.process_differences(o, o_, size) for (o,o_) in zip(td, td_)]
+            heatmaps[0,:,i] = bu_diff
+            heatmaps[1,:,i] = td_diff
+
+        scale = 15.
+        fig = plt.figure(figsize=(3 * scale, scale))
+        grid = ImageGrid(
+            fig, 111, nrows_ncols=(1+len(bu), 2*len(phrases)), direction="column", axes_pad=(0.1, 0.3))
+
+        images = []
+        image_ = ("image", image)
+        predicted = ("predicted", self.predict(img, txt, size))
+        for i in range(len(phrases)):
+            images.append(image_)
+            for j in range(len(bu)):
+                images.append(("...", heatmaps[0,j,i]))
+            images.append(predicted)
+            for j in range(len(td)):
+                images.append(("...", heatmaps[1,j,i]))
+                
+        for ax in grid:
+            ax.axis('off')
+        for ax, (title, im) in zip(grid, images):
+            ax.axis('off')
+            ax.set_title(title)
+            ax.imshow(im)
+        plt.show()
+        print(f"phrase: {phrase}")
+        
+    def process_differences(self, t1, t2, size):
+        diff = torch.mean((t1-t2)**2, dim=1)
+        normalized = self.normalize(diff).unsqueeze(0)
+        image_size = self.data_module.config["image_size"]
+        t = F.interpolate(normalized, image_size)
+        t = t.view(image_size, image_size)
+        h, w = size.flatten().numpy()
+        return t[:h, :w]
+        
+    def normalize(self, arr):
+        return (arr - arr.min()) / (arr.max() - arr.min() + 1e-6)
+        
+    def generate_feature_maps(self, img, phrase, size, datasplit_id):
+        test_data = self.data_module.test_datasplits[datasplit_id]
+        txt = test_data.tokenize_phrase(phrase).to(self.device).unsqueeze(1)
+        model = self.model
+        scale = sizes2scales(size, img.size())
+        vis = model.image_encoder(img, scales2sizes(scale, img.size()))
+        txt_ = model.text_encoder(txt)
+        txt_ = txt_[1][0].squeeze(0)
+        num_layers = model.multimodal_encoder.config["num_layers"]
+        text_dim = model.multimodal_encoder.config["text_embedding_dim"]
+        hidden_size = text_dim // num_layers
+        parted = [
+            txt_[:, i*hidden_size:(i+1)*hidden_size]
+            for i in range(num_layers)
+        ]
+        bu = model.multimodal_encoder.bottom_up(vis, parted, scale)
+        td = model.multimodal_encoder.top_down(bu, parted)[::-1]
+        bu = [x.detach().cpu() for x in bu[1:]]
+        td = [x.detach().cpu() for x in td]
+        return bu, td
