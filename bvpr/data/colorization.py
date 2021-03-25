@@ -23,9 +23,8 @@ SOS_TOKEN = '<s>'
 
 class ColorizationDataset(Dataset):
     def __init__(
-        self, data_root, transform=None, split="train", max_query_len=-1,
-            year=2014, min_occur=5, L_transform=None, ab_transform=None,
-            tokenize=True):
+        self, data_root, split="train", max_query_len=-1, year=2014,
+            min_occur=5, L_transform=None, ab_transform=None, tokenize=True):
         self.data_root = osp.abspath(osp.expanduser(data_root))
         self.split = split
         self.year = year
@@ -98,7 +97,7 @@ class ColorizationDataset(Dataset):
         tokens = [SOS_TOKEN] + self.tokenizer(caption)
         w2i = self.corpus.dictionary.word2idx
         tokens = [w2i.get(t, w2i[UNK_TOKEN]) for t in tokens]
-        return tokens
+        return torch.tensor(tokens)
 
     def __len__(self):
         return len(self.captions)
@@ -111,8 +110,8 @@ class ColorizationDataset(Dataset):
 
         if self.tokenize:
             caption = self.tokenize_caption(caption)
-        if self.l_transform is not None:
+        if self.L_transform is not None:
             L = self.L_transform(L)
         if self.ab_transform is not None:
             ab = self.ab_transform(ab)
-        return L, size, caption, ab
+        return L, ab, size, caption

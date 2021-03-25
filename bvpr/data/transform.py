@@ -32,14 +32,27 @@ class DownsizeImage(object):
 
 class PadBottomRight(object):
     """Handle the zero padding by placing image the top left corner"""
-    def __init__(self, size):
+    def __init__(self, size, pad_value=0):
         self.size = size
+        self.pad_value = pad_value
 
     def __call__(self, img):
         c = 1
         h, w = img.shape[-2:]
         if img.dim() in (3, 4):
             c = img.shape[-3]
-        padded = torch.zeros((c, self.size, self.size))
+        padded = torch.ones((c, self.size, self.size)) * self.pad_value
         padded[:, :h, :w] = img
         return padded
+
+
+class ABColorDiscretizer(object):
+    def __call__(self, image):
+        bin_size = 10
+        min_val = -120
+        grid_dim = 25
+
+        quantized = torch.round(image / bin_size)
+        quantized = quantized - (min_val / bin_size)
+        discrete = quantized[0, :, :] * grid_dim + quantized[1, :, :]
+        return discrete
