@@ -152,3 +152,45 @@ class SegmentationExperiment(BaseExperiment):
                     lines = [",".join([str(x) for x in output]) + "\n"
                              for output in batch_outputs]
                     f.writelines(lines)
+
+
+class ColorizationExperiment(BaseExperiment):
+    def __init__(self, config) :
+        super().__init__(config)
+        weight = None  # FIXME: load priors
+        self.criterion = nn.CrossEntropyLoss(weight=weight, ignore_index=-1)
+
+    def training_step(self, batch, batch_index):
+        L, caption, size, ab = batch
+        scores = self(L, caption, size)
+        loss = self.criterion(scores[-1], ab)  # FIXME: multi-scale
+        return {"loss": loss}
+
+    def training_epoch_end(self, outputs):
+        loss = torch.stack([x["loss"] for x in outputs]).mean()
+        self.log("trn_loss", loss)
+
+    def validation_step(self, batch, batch_index):
+        L, caption, size, ab = batch
+        scores = self(L, caption, size)
+        loss = self.criterion(scores[-1], ab)  # FIXME: multi-scale
+        batch_size = L.shape[0]
+        num_pixels = torch.sum(ab > 0).item()
+        top1 = 0  # FIXME: implement top1
+        top5 = 0  # FIXME: implement top5
+
+        return {
+            "loss": loss,
+            "B": batch_size,
+            "N": num_pixels,
+            "top1": top1,
+            "top5": top5,
+        }
+
+    def validation_epoch_end(self, outputs):  # FIXME: revisit this function
+        num_pixels = 0
+        total_loss = 0.0
+        for output in outputs:
+            num_pixels += output["N"]
+            total_loss += output["loss"] * output["N"]
+        self.log("val_loss", total_loss / num_pixels)

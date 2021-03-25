@@ -84,4 +84,4 @@ class SegmentationModel(nn.Module):
 
 
 class ColorizationModel(SegmentationModel):
-    NUM_CLASSES = 3
+    NUM_CLASSES = 625
