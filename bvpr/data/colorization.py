@@ -24,7 +24,8 @@ SOS_TOKEN = '<s>'
 class ColorizationDataset(Dataset):
     def __init__(
         self, data_root, split="train", max_query_len=-1, year=2014,
-            min_occur=5, L_transform=None, ab_transform=None, tokenize=True):
+            min_occur=5, L_transform=None, ab_transform=None, tokenize=True,
+            **kwargs):
         self.data_root = osp.abspath(osp.expanduser(data_root))
         self.split = split
         self.year = year
@@ -86,9 +87,13 @@ class ColorizationDataset(Dataset):
         image = io.imread(image_path)
         im_h, im_w = image.shape[:2]
         size = torch.tensor([im_h, im_w])
-        if len(image.shape) == 1:
+        if len(image.shape) == 2:
             image = np.stack([image] * 3, axis=-1)
-        image = color.rgb2lab(image)
+        try:
+            image = color.rgb2lab(image)
+        except ValueError:
+            import ipdb; ipdb.set_trace()
+            None
         L, ab = image[:, :, 0], image[:, :, 1:]
         L = np.stack([L] * 3, axis=-1)
         return (L, ab, size)

@@ -163,7 +163,7 @@ class ColorizationExperiment(BaseExperiment):
     def training_step(self, batch, batch_index):
         L, caption, size, ab = batch
         scores = self(L, caption, size)
-        loss = self.criterion(scores[-1], ab)  # FIXME: multi-scale
+        loss = self.criterion(scores[-1], ab.squeeze())
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
@@ -173,7 +173,7 @@ class ColorizationExperiment(BaseExperiment):
     def validation_step(self, batch, batch_index):
         L, caption, size, ab = batch
         scores = self(L, caption, size)
-        loss = self.criterion(scores[-1], ab)  # FIXME: multi-scale
+        loss = self.criterion(scores[-1], ab.squeeze())
         batch_size = L.shape[0]
         num_pixels = torch.sum(ab > 0).item()
         top1 = 0  # FIXME: implement top1

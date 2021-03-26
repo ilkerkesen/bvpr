@@ -195,7 +195,8 @@ class LSTMEncoder(nn.Module):
 
 
 class MaskPredictor(nn.Module):
-    def __init__(self, config, in_channels, num_layers, multiscale, num_classes=1):
+    def __init__(
+            self, config, in_channels, num_layers, multiscale, num_classes=1):
         super().__init__()
         self.layers  = nn.ModuleList()
         self.loss_output_layers = nn.ModuleList()
@@ -207,7 +208,7 @@ class MaskPredictor(nn.Module):
         self.config = config
         self.multiscale = multiscale
         self.num_layers = num_layers
-        self.num_classes = 1
+        self.num_classes = num_classes
 
         for i in range(num_layers-1):
             _in_channels = config["num_channels"] if i > 0 else in_channels
@@ -216,14 +217,15 @@ class MaskPredictor(nn.Module):
                     **layer_kwargs,
                     in_channels=_in_channels,
                     out_channels=config["num_channels"]))
-            self.loss_output_layers.append(
-                nn.ConvTranspose2d(
-                    in_channels=config["num_channels"],
-                    out_channels=self.num_classes,
-                    kernel_size=1,
-                    stride=1,
-                    padding=0,
-                ))
+            if self.multiscale:
+                self.loss_output_layers.append(
+                    nn.ConvTranspose2d(
+                        in_channels=config["num_channels"],
+                        out_channels=self.num_classes,
+                        kernel_size=1,
+                        stride=1,
+                        padding=0,
+                    ))
         self.layers.append(
             nn.ConvTranspose2d(
                 **layer_kwargs,

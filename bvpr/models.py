@@ -44,7 +44,7 @@ class LSTMCNNBaseline(nn.Module):
 
 class SegmentationModel(nn.Module):
     NUM_CLASSES = 1
-    
+
     """Our main model."""
     def __init__(self, config):
         super().__init__()

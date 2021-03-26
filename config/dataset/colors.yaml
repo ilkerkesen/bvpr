@@ -1,0 +1,4 @@
+# @package _group_
+dataset: "colors"
+data_root: "/userfiles/ikesen16/data/colorization"
+min_occur: 5
