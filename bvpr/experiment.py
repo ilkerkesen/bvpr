@@ -174,23 +174,30 @@ class ColorizationExperiment(BaseExperiment):
         L, caption, size, ab = batch
         scores = self(L, caption, size)
         loss = self.criterion(scores[-1], ab.squeeze())
-        batch_size = L.shape[0]
         num_pixels = torch.sum(ab > 0).item()
-        top1 = 0  # FIXME: implement top1
-        top5 = 0  # FIXME: implement top5
+        top5_pred = scores[-1].topk(5, dim=1).indices == ab
+        num_correct = top5_pred.sum(dim=(0, 2, 3))
+        top1 = num_correct[0].item()
+        top5 = num_correct.sum().item()
 
         return {
             "loss": loss,
-            "B": batch_size,
             "N": num_pixels,
             "top1": top1,
             "top5": top5,
         }
 
-    def validation_epoch_end(self, outputs):  # FIXME: revisit this function
+    def validation_epoch_end(self, outputs):
         num_pixels = 0
         total_loss = 0.0
+        top1 = top5 = 0
+
         for output in outputs:
             num_pixels += output["N"]
             total_loss += output["loss"] * output["N"]
+            top1 += output["top1"]
+            top5 += output["top5"]
+
         self.log("val_loss", total_loss / num_pixels)
+        self.log("val_top1_acc", top1 / num_pixels)
+        self.log("val_top5_acc", top5 / num_pixels, prog_bar=True)

@@ -28,8 +28,8 @@ checkpoint:
   save_top_k: 3
   save_last: true
   verbose: true
-  monitor: "val_loss"
-  mode: "min"
+  monitor: "val_top5_acc"
+  mode: "max"
   prefix: ""
   filepath: null
 
