@@ -1,0 +1,32 @@
+# @package _group_
+architecture: ColorizationModel
+multiscale: false
+use_location_embeddings: true
+text_encoder:
+  name: LSTMEncoder
+  hidden_size: 256
+  bidirectional: false
+  embedding_dim: 300
+  glove: true
+  dropout: 0.2
+image_encoder:
+  name: deeplabv3plus_resnet50
+  num_layers: 3
+  pretrained: true
+  freeze: true
+multimodal_encoder:
+  topdown: true
+  bottomup: true
+  num_layers: 4
+  num_kernels: 128
+  connected: true
+  kernel_size: 5
+  stride: 2
+  dilation: 1
+  text_kernel_size: 1  
+  layer: "conv"  # or film
+mask_predictor:
+  num_channels: 128
+  kernel_size: 5
+  stride: 2
+  padding: 2

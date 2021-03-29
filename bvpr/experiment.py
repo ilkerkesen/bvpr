@@ -152,3 +152,52 @@ class SegmentationExperiment(BaseExperiment):
                     lines = [",".join([str(x) for x in output]) + "\n"
                              for output in batch_outputs]
                     f.writelines(lines)
+
+
+class ColorizationExperiment(BaseExperiment):
+    def __init__(self, config):
+        super().__init__(config)
+        priors = config.get("priors", None)
+        self.criterion = nn.CrossEntropyLoss(weight=priors, ignore_index=-1)
+
+    def training_step(self, batch, batch_index):
+        L, caption, size, ab = batch
+        scores = self(L, caption, size)
+        loss = self.criterion(scores[-1], ab.squeeze())
+        return {"loss": loss}
+
+    def training_epoch_end(self, outputs):
+        loss = torch.stack([x["loss"] for x in outputs]).mean()
+        self.log("trn_loss", loss)
+
+    def validation_step(self, batch, batch_index):
+        L, caption, size, ab = batch
+        scores = self(L, caption, size)
+        loss = self.criterion(scores[-1], ab.squeeze())
+        num_pixels = torch.sum(ab > 0).item()
+        top5_pred = scores[-1].topk(5, dim=1).indices == ab
+        num_correct = top5_pred.sum(dim=(0, 2, 3))
+        top1 = num_correct[0].item()
+        top5 = num_correct.sum().item()
+
+        return {
+            "loss": loss,
+            "N": num_pixels,
+            "top1": top1,
+            "top5": top5,
+        }
+
+    def validation_epoch_end(self, outputs):
+        num_pixels = 0
+        total_loss = 0.0
+        top1 = top5 = 0
+
+        for output in outputs:
+            num_pixels += output["N"]
+            total_loss += output["loss"] * output["N"]
+            top1 += output["top1"]
+            top5 += output["top5"]
+
+        self.log("val_loss", total_loss / num_pixels)
+        self.log("val_top1_acc", top1 / num_pixels)
+        self.log("val_top5_acc", top5 / num_pixels, prog_bar=True)

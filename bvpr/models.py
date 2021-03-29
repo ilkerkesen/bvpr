@@ -44,7 +44,7 @@ class LSTMCNNBaseline(nn.Module):
 
 class SegmentationModel(nn.Module):
     NUM_CLASSES = 1
-    
+
     """Our main model."""
     def __init__(self, config):
         super().__init__()
@@ -84,4 +84,4 @@ class SegmentationModel(nn.Module):
 
 
 class ColorizationModel(SegmentationModel):
-    NUM_CLASSES = 3
+    NUM_CLASSES = 261  # FIXME: fix hardcode

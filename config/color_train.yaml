@@ -1,0 +1,42 @@
+seed: 42
+image_size: 512
+
+defaults:
+  - model: ColorizationModel
+  - dataset: colors
+  - optimizer: Adam
+  - scheduler: ReduceLROnPlateau
+  - trainer: color
+  - hydra/job_logging: disabled
+
+criterion: "MaskedMultiScaleBCELoss"
+
+# data loader
+loader:
+  batch_size: 16
+  pin_memory: false
+  num_workers: 5
+
+# logger (tensorboard)
+logger:
+  name: null
+  version: null
+  save_dir: ~/logs/bvpr/colors
+
+# checkpoint
+checkpoint:
+  save_top_k: 3
+  save_last: true
+  verbose: true
+  monitor: "val_top5_acc"
+  mode: "max"
+  prefix: ""
+  filepath: null
+
+# resume training
+checkpoint_path: null
+
+# hydra-specific
+hydra:
+  run:
+    dir: .

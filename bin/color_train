@@ -1,0 +1,59 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import os
+import os.path as osp
+from copy import deepcopy
+
+import torch
+import torch.nn as nn
+from torch.nn import functional as F
+import pytorch_lightning as pl
+import hydra
+from omegaconf import OmegaConf
+
+from bvpr.util import process_config, create_callbacks
+from bvpr.data.colorization import ColorizationDataset as Dataset
+from bvpr.experiment import ColorizationExperiment as Experiment
+from bvpr.datamodule import ColorizationDataModule as DataModule
+
+
+CONFIG_DIR = osp.abspath(osp.join(__file__, "../..", "config"))
+
+
+@hydra.main(config_path=CONFIG_DIR, config_name="color_train")
+def main(config):
+    config = OmegaConf.to_container(config)
+    config = pl.utilities.parsing.AttributeDict(config)
+    pl.seed_everything(config["seed"])
+    print(config)
+
+    # data
+    train_data = Dataset(split="train", **config["dataset"])
+    config["model"] = process_config(config["model"], train_data)
+    config["priors"] = train_data.priors
+
+    # logger
+    config["logger"]["save_dir"] = osp.abspath(
+        osp.expanduser(config["logger"]["save_dir"]))
+    if config["logger"]["name"] is None:
+        architecture = config["model"]["architecture"]
+        dataset = config["dataset"]["dataset"]
+        config["logger"]["name"] = f"{architecture}-{dataset}"
+    logger = pl.loggers.TensorBoardLogger(**config["logger"])
+
+    # checkpoint
+    callbacks, ckpt_path = create_callbacks(config, logger.log_dir)
+    config["trainer"]["resume_from_checkpoint"] = ckpt_path
+    experiment = Experiment(config)
+    datamodule = DataModule(config)
+    trainer = pl.Trainer(
+        logger=logger,
+        callbacks=callbacks,
+        **config["trainer"]) 
+    trainer.fit(experiment, datamodule=datamodule)
+
+
+
+if __name__ == "__main__":
+    main()
