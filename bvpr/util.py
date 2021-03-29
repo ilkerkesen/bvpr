@@ -8,6 +8,28 @@ import pytorch_lightning as pl
 from bvpr.data.colorization import ColorizationDataset
 
 
+MOBILENET_SIZE_MAP = [
+    (32, 1),
+    (16, 1),
+    (24, 2),
+    (24, 2),
+    (32, 3),
+    (32, 3),
+    (32, 3),
+    (64, 4),
+    (64, 4),
+    (64, 4),
+    (64, 4),
+    (96, 4),
+    (96, 4),
+    (96, 4),
+    (160, 5),
+    (160, 5),
+    (160, 5),
+    (320, 5),
+    (1280, 5)]
+
+
 __all__ = (
     "process_config",
 )
@@ -25,10 +47,10 @@ def process_config(cfg, dataset):
             predictor_num_layers = 3
     elif encoder == "resnet18":
         predictor_num_layers = encoder_num_layers + 1
+    elif encoder == "mobilenetv2":
+        predictor_num_layers = MOBILENET_SIZE_MAP[encoder_num_layers-1][1]
     cfg["text_encoder"]["corpus"] = dataset.corpus
     cfg["mask_predictor"]["num_layers"] = predictor_num_layers
-    if isinstance(dataset, ColorizationDataset):
-        cfg["priors"] = dataset.priors
     return cfg
 
 

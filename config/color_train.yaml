@@ -1,4 +1,4 @@
-seed: 1
+seed: 42
 image_size: 512
 
 defaults:
@@ -6,16 +6,16 @@ defaults:
   - dataset: colors
   - optimizer: Adam
   - scheduler: ReduceLROnPlateau
-  - trainer: train
+  - trainer: color
   - hydra/job_logging: disabled
 
 criterion: "MaskedMultiScaleBCELoss"
 
 # data loader
 loader:
-  batch_size: 32
+  batch_size: 16
   pin_memory: false
-  num_workers: 16
+  num_workers: 5
 
 # logger (tensorboard)
 logger:

@@ -31,6 +31,7 @@ def main(config):
     # data
     train_data = Dataset(split="train", **config["dataset"])
     config["model"] = process_config(config["model"], train_data)
+    config["priors"] = train_data.priors
 
     # logger
     config["logger"]["save_dir"] = osp.abspath(

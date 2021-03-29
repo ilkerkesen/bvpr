@@ -7,10 +7,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models import resnet18, resnet50, resnet101
-from torchvision.transforms import Normalize
 from torchtext.vocab import GloVe
 
 from bvpr.util import add_batch_location_embeddings
+from bvpr.util import MOBILENET_SIZE_MAP
 from bvpr.extra import deeplab
 
 
@@ -307,6 +307,18 @@ class ImageEncoder(nn.Module):
         self.model = nn.Sequential(*layers[:4+num_layers])
         self.num_downsample = 2 + int(num_layers > 2)
         self.num_channels = 256 * 2**(num_layers-1)
+        self.num_channels += 8 * self.use_location_embeddings
+
+    def setup_mobilenetv2(self, config):
+        model = torch.hub.load(
+            "pytorch/vision:v0.8.2",
+            "mobilenet_v2",
+            pretrained=True)
+        num_layers = config["num_layers"]
+        layers = list(model.features.children())
+        self.model = nn.Sequential(*layers[:num_layers])
+        self.num_downsample = MOBILENET_SIZE_MAP[num_layers-1][1]
+        self.num_channels = MOBILENET_SIZE_MAP[num_layers-1][0]
         self.num_channels += 8 * self.use_location_embeddings
 
     def forward(self, x, size=None):

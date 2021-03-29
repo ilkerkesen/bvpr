@@ -25,15 +25,22 @@ class ColorizationDataset(Dataset):
     def __init__(
         self, data_root, split="train", max_query_len=-1, year=2014,
             min_occur=5, L_transform=None, ab_transform=None, tokenize=True,
-            **kwargs):
+            reduce_colors=True, **kwargs):
         self.data_root = osp.abspath(osp.expanduser(data_root))
         self.split = split
         self.year = year
         self.image_dir = osp.join(self.data_root, f"{self.split}{self.year}") 
         self.tokenizer = get_tokenizer("basic_english")
         self.corpus = self.load_corpus(min_occur=min_occur)
-        self.priors = np.load(osp.join(
-            self.data_root, "coco_priors_onehot_625.npy"))
+        self.reduce_colors = reduce_colors
+        priors_path = osp.join(self.data_root, "coco_priors_onehot_625.npy")
+        self.raw_priors = torch.tensor(np.load(priors_path)).float()
+        self.num_colors = self.raw_priors.numel()
+        self.ab_mask = self.raw_priors > 0
+        self.color2index = -torch.ones(self.num_colors).long()
+        self.color2index[self.ab_mask] = torch.arange(self.ab_mask.sum())
+        self.index2color = torch.arange(self.num_colors)[self.ab_mask]
+        self.priors = self.raw_priors[self.raw_priors > 0]
         self.load_data()
 
         self.L_transform = L_transform
@@ -121,4 +128,6 @@ class ColorizationDataset(Dataset):
             L = self.L_transform(L)
         if self.ab_transform is not None:
             ab = self.ab_transform(ab)
+            if self.reduce_colors:
+                ab = self.color2index[ab.long()]
         return L, ab, size, caption
