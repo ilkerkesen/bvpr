@@ -155,10 +155,10 @@ class SegmentationExperiment(BaseExperiment):
 
 
 class ColorizationExperiment(BaseExperiment):
-    def __init__(self, config) :
+    def __init__(self, config):
         super().__init__(config)
-        weight = None  # FIXME: load priors
-        self.criterion = nn.CrossEntropyLoss(weight=weight, ignore_index=-1)
+        priors = config.get("priors", None)
+        self.criterion = nn.CrossEntropyLoss(weight=priors, ignore_index=-1)
 
     def training_step(self, batch, batch_index):
         L, caption, size, ab = batch

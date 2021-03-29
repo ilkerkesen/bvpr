@@ -32,6 +32,8 @@ class ColorizationDataset(Dataset):
         self.image_dir = osp.join(self.data_root, f"{self.split}{self.year}") 
         self.tokenizer = get_tokenizer("basic_english")
         self.corpus = self.load_corpus(min_occur=min_occur)
+        self.priors = np.load(osp.join(
+            self.data_root, "coco_priors_onehot_625.npy"))
         self.load_data()
 
         self.L_transform = L_transform

@@ -1,10 +1,11 @@
-import os
 import os.path as osp
 from copy import deepcopy
 
 import numpy as np
 import torch
 import pytorch_lightning as pl
+
+from bvpr.data.colorization import ColorizationDataset
 
 
 __all__ = (
@@ -26,6 +27,8 @@ def process_config(cfg, dataset):
         predictor_num_layers = encoder_num_layers + 1
     cfg["text_encoder"]["corpus"] = dataset.corpus
     cfg["mask_predictor"]["num_layers"] = predictor_num_layers
+    if isinstance(dataset, ColorizationDataset):
+        cfg["priors"] = dataset.priors
     return cfg
 
 
