@@ -98,11 +98,7 @@ class ColorizationDataset(Dataset):
         size = torch.tensor([im_h, im_w])
         if len(image.shape) == 2:
             image = np.stack([image] * 3, axis=-1)
-        try:
-            image = color.rgb2lab(image)
-        except ValueError:
-            import ipdb; ipdb.set_trace()
-            None
+        image = color.rgb2lab(image)
         L, ab = image[:, :, 0], image[:, :, 1:]
         L = np.stack([L] * 3, axis=-1)
         return (L, ab, size)
