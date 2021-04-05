@@ -31,8 +31,8 @@ def make_ab_transform(image_dim):
 
 class SegmentationDataModule(pl.LightningDataModule):
     TEST_SPLITS = {
-        "unc": ("testA", "testB"),
-        "unc+": ("testA", "testB"),
+        "unc": ("val", "testA", "testB"),
+        "unc+": ("val", "testA", "testB"),
         "referit": ("test",),
         "gref": ("val",),
     }
