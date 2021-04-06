@@ -157,13 +157,14 @@ class SegmentationExperiment(BaseExperiment):
 class ColorizationExperiment(BaseExperiment):
     def __init__(self, config):
         super().__init__(config)
-        priors = config.get("priors", None)
-        self.criterion = nn.CrossEntropyLoss(weight=priors, ignore_index=-1)
+        self.criterion = nn.MSELoss()
 
     def training_step(self, batch, batch_index):
         L, caption, size, ab = batch
         scores = self(L, caption, size)
-        loss = self.criterion(scores[-1], ab.squeeze(1))
+        scores = torch.tanh(scores[-1])
+        pixels = ab >= -1.0
+        loss = self.criterion(scores[pixels], ab[pixels])
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
@@ -173,31 +174,30 @@ class ColorizationExperiment(BaseExperiment):
     def validation_step(self, batch, batch_index):
         L, caption, size, ab = batch
         scores = self(L, caption, size)
-        loss = self.criterion(scores[-1], ab.squeeze(1))
-        num_pixels = torch.sum(ab > 0).item()
-        top5_pred = scores[-1].topk(5, dim=1).indices == ab
-        num_correct = top5_pred.sum(dim=(0, 2, 3))
-        top1 = num_correct[0].item()
-        top5 = num_correct.sum().item()
+        scores = torch.tanh(scores[-1])
+        pixels = ab[:, :, :, :] >= -1.0
+        num_pixels = size.prod(dim=1).sum().item()
+        loss = self.criterion(scores[pixels], ab[pixels])
+        ab_quantized = torch.round(ab * 128 / 10)
+        scores_quantized = torch.round(scores * 128 / 10) 
+        correct = torch.prod(scores_quantized == ab_quantized, dim=1)
+        num_correct = correct.sum().item()
 
         return {
             "loss": loss,
             "N": num_pixels,
-            "top1": top1,
-            "top5": top5,
+            "top1": num_correct,
         }
 
     def validation_epoch_end(self, outputs):
         num_pixels = 0
         total_loss = 0.0
-        top1 = top5 = 0
+        top1 = 0
 
         for output in outputs:
             num_pixels += output["N"]
             total_loss += output["loss"] * output["N"]
             top1 += output["top1"]
-            top5 += output["top5"]
 
         self.log("val_loss", total_loss / num_pixels)
-        self.log("val_top1_acc", top1 / num_pixels)
-        self.log("val_top5_acc", top5 / num_pixels, prog_bar=True)
+        self.log("val_top1_acc", top1 / num_pixels, prog_bar=True)

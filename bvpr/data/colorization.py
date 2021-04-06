@@ -25,7 +25,7 @@ class ColorizationDataset(Dataset):
     def __init__(
         self, data_root, split="train", max_query_len=-1, year=2014,
             min_occur=5, L_transform=None, ab_transform=None, tokenize=True,
-            reduce_colors=True, **kwargs):
+            reduce_colors=False, **kwargs):
         self.data_root = osp.abspath(osp.expanduser(data_root))
         self.split = split
         self.year = year

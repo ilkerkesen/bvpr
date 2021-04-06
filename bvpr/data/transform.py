@@ -16,7 +16,7 @@ class DownsizeImage(object):
 
     def __call__(self, img):
         im_h, im_w = img.shape[-2:]
-        nc = 3 if img.dim() == 3 else 1
+        nc = img.shape[0] if img.dim() == 3 else 1
         scale = min(self.size / im_h, self.size / im_w)
         if scale >= 1.0:
             return Variable(img).view(-1, nc, im_h, im_w)

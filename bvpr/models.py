@@ -84,4 +84,4 @@ class SegmentationModel(nn.Module):
 
 
 class ColorizationModel(SegmentationModel):
-    NUM_CLASSES = 261  # FIXME: fix hardcode
+    NUM_CLASSES = 2  # FIXME: fix hardcode

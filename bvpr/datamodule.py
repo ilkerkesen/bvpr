@@ -23,9 +23,9 @@ def make_input_transform(normalizer, image_dim):
 def make_ab_transform(image_dim):
     return ts.Compose([
         ts.ToTensor(),
-        ABColorDiscretizer(),
+        ts.Lambda(lambda x: torch.clamp(x / 128, -1., 1.)),
         DownsizeImage(image_dim),
-        PadBottomRight(image_dim, pad_value=-1),
+        PadBottomRight(image_dim, pad_value=-100),
     ])
 
 
@@ -143,8 +143,6 @@ def collate_fn(task="segmentation"):
             text[-len(sent):, i] = sent
         if task == "segmentation":
             target = target.float()
-        elif task == "colorization":
-            target = target.long()
         return input.float(), text, size, target
     return collate_fn 
 
