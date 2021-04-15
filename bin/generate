@@ -29,6 +29,7 @@ def main(config):
     # data
     config["checkpoint"] = osp.abspath(osp.expanduser(config["checkpoint"]))
     config["trainer"]["resume_from_checkpoint"] = config["checkpoint"]
+    config["trainer"]["max_epochs"] = 100
     ckpt = torch.load(config["checkpoint"])
     config["model"] = ckpt["hyper_parameters"]["model"]
     train_data = Dataset(split="train", **config["dataset"])
