@@ -1,0 +1,12 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import pandas as pd
+import sys
+
+if __name__ == "__main__":
+    print(sys.argv)
+    df = pd.read_csv(sys.argv[1], header=None, names=["idx", "split", "phrase", "intersection", "union", "IoU"])
+    split_scores = df.groupby(by=["split"])[["intersection", "union"]].sum().reset_index()
+    split_scores["IoU"] = split_scores.apply(lambda row: row["intersection"] / row["union"], axis=1)
+    print(split_scores[["split", "IoU"]])
