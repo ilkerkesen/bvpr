@@ -5,8 +5,6 @@ import numpy as np
 import torch
 import pytorch_lightning as pl
 
-from bvpr.data.colorization import ColorizationDataset
-
 
 MOBILENET_SIZE_MAP = [
     (32, 1),
@@ -158,3 +156,31 @@ def size2scale(raw_size, processed_size):
         ratio_w = 1.0
         ratio_h = ((new_w / float(im_w)) * im_h) / new_h
     return torch.tensor([[ratio_h, ratio_w]])
+
+
+def prior_boosting(prior_file, alpha, gamma):
+    prior_probs = np.load(prior_file)
+
+    # define uniform probability
+    uni_probs = np.zeros_like(prior_probs)
+    uni_probs[prior_probs!=0] = 1.
+    uni_probs = uni_probs/np.sum(uni_probs)
+
+    # convex combination of empirical prior and uniform distribution       
+    prior_mix = (1-gamma)*prior_probs + gamma*uni_probs
+
+    # set prior factor
+    prior_factor = prior_mix**-alpha
+    prior_factor[prior_factor==np.inf] = 0. # mask out unused classes
+    prior_factor = prior_factor/np.sum(prior_probs*prior_factor) # re-normalize
+
+    # implied empirical prior
+    # implied_prior = prior_probs*prior_factor
+    # implied_prior = implied_prior/np.sum(implied_prior) # re-normalize
+    return prior_factor
+
+
+def annealed_mean(z, T=1.0, dim=1):
+    num = torch.exp(torch.log(z) / T)
+    den = torch.sum(num, dim=1)
+    return num / den

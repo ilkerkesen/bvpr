@@ -1,24 +1,18 @@
 import os.path as osp
-from copy import deepcopy
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import ImageGrid
 import torch
 import torch.nn.functional as F
 import numpy as np
-from scipy.spatial.distance import euclidean, cosine
+from scipy.spatial.distance import euclidean
+from torchvision import transforms as ts
 
-from bvpr import data
-from bvpr.util import process_config
-from bvpr.models import SegmentationModel as Model
-from bvpr.datamodule import SegmentationDataModule as DataModule
-from bvpr.util import sizes2scales, scales2sizes
-
-DATASET_NAME = "unc"
-DATASET_PATH = "~/data/refexp/data"
-CHECKPOINT_PATH = "~/model.ckpt"
-DEVICE = "cuda:0"
-THRESHOLD = 0.40
+from bvpr.models import SegmentationModel, ColorizationModel
+from bvpr.datamodule import SegmentationDataModule, ColorizationDataModule
+from bvpr.util import sizes2scales, scales2sizes, annealed_mean
+from bvpr.evaluation import compute_pixel_acc
+from skimage import io, color
 
 
 class SegmentationDemo(object):
@@ -45,7 +39,7 @@ class SegmentationDemo(object):
         self.device = torch.device(device)
 
         # load data
-        self.data_module = DataModule(data_config)
+        self.data_module = SegmentationDataModule(data_config)
         self.data_module.setup(stage="test")
 
         # load model
@@ -53,7 +47,7 @@ class SegmentationDemo(object):
         state_dict = ckpt["state_dict"].items()
         state_dict = {".".join(k.split(".")[1:]): v for (k, v) in state_dict}
         model_config = ckpt["hyper_parameters"]["model"]
-        self.model = Model(model_config).to(device)
+        self.model = SegmentationModel(model_config).to(device)
         self.model.load_state_dict(state_dict)
 
     def get_data(self, example_id, datasplit_id=0, custom_phrase=None):
@@ -368,3 +362,138 @@ class WordRemovalActivationDemo(SegmentationDemo):
         bu = [x.detach().cpu() for x in bu[1:]]
         td = [x.detach().cpu() for x in td]
         return bu, td
+
+
+class ColorizationDemo(object):
+    def __init__(self, checkpoint_path, data_path, device="cuda:0"):
+        data_config = {
+            "image_size": 224,
+
+            "dataset": {
+                "dataset": "colors",
+                "data_root": data_path,
+            },
+
+            # just in case
+            "loader": {
+                "num_workers": 0,
+                "pin_memory": False,
+                "batch_size": 1,
+            }
+        }
+
+        self.checkpoint_path = osp.abspath(osp.expanduser(checkpoint_path))
+        self.device = torch.device(device)
+
+        # load data
+        self.data_module = ColorizationDataModule(data_config)
+        self.data_module.setup()
+
+        # load model
+        ckpt = torch.load(self.checkpoint_path)
+        state_dict = ckpt["state_dict"].items()
+        self.weights = ckpt["state_dict"].get("criterion.weights", None)
+        state_dict = {".".join(k.split(".")[1:]): v for (k, v) in state_dict if k.startswith("model")}
+        model_config = ckpt["hyper_parameters"]["model"]
+        self.model = ColorizationModel(model_config).to(device)
+        self.model.load_state_dict(state_dict)
+        self.model.eval()
+
+        # setup utils
+        a_ = torch.unsqueeze(torch.arange(625) // 25, 0)
+        b_ = torch.unsqueeze(torch.arange(625) % 25, 0)
+        ab_ = 10 * torch.cat([a_, b_], dim=0) - 120
+        ab_ = ab_.unsqueeze(0).float()
+        self.ab = ab_[:, :, self.data_module.test_data.ab_mask]
+
+        self.rgb_transform = ts.Compose([
+            ts.ToTensor(),
+            ts.Resize(data_config["image_size"]),
+            ts.CenterCrop(data_config["image_size"]),
+            ts.Lambda(lambda x: x.permute(1, 2, 0)),
+        ])
+
+        self.test_data = self.data_module.test_data
+
+    def get_data(self, example_id, custom_caption=None):
+        item = self.test_data.captions[example_id]
+        caption = item["caption"]
+        if custom_caption is not None:
+            caption = custom_caption
+        image_file = self.test_data.image_dict[item["image_id"]]["file_name"]
+        rgb = self.test_data.read_rgb_image(image_file)
+        rgb = self.rgb_transform(rgb)
+        lab = color.rgb2lab(rgb.numpy())
+        return lab, rgb, caption
+
+    def predict(self, img, txt, size):
+        h, w = size.flatten().numpy()
+        predicted = self.model(img, txt, size)[-1]
+        predicted = predicted[:, :, :h, :w].float().detach().cpu()
+        return predicted
+
+    def visualize(self, example_id, custom_caption=None, averaged=True, T=1.0):
+        lab, rgb, caption = self.get_data(example_id, custom_caption)
+        L = self.test_data.L_transform(lab[:, :, 0]).unsqueeze(0).to(self.device)
+        ab = self.test_data.color2index[self.test_data.ab_transform(lab[:, :, 1:])].unsqueeze(0)
+        txt = self.test_data.tokenize_caption(caption).to(self.device).unsqueeze(1)
+        im_h, im_w = lab.shape[:2]
+        size = torch.tensor([im_h, im_w]).unsqueeze(0)
+        predicted = self.predict(L, txt, size)
+        probs = F.softmax(predicted, dim=1)
+        probs = annealed_mean(probs, T=T)
+        probs = probs[:,:, :size[0,0], :size[0,1]]
+        ab_pred = None
+
+        if averaged:
+            ab_pred = torch.bmm(self.ab, probs.reshape(1, probs.shape[1], -1))
+            ab_pred = ab_pred.reshape(2, size[0, 0], size[0, 1])
+            ab_pred = ab_pred.permute(1, 2, 0)
+        else:
+            ab_pred = probs.argmax(dim=1)
+            ab_pred = self.test_data.index2color[ab_pred]
+            a = ab_pred // 25
+            b = ab_pred % 25
+            ab_pred = 10 * torch.cat([a, b], dim=0) - 120
+            ab_pred = ab_pred.permute(1,2,0).numpy()
+
+        colorized = np.empty((size[0,0], size[0,1], 3))
+        colorized[:, :, 0] = lab[:, :, 0]
+        colorized[:, :, 1:] = ab_pred
+        colorized_rgb = color.lab2rgb(colorized)
+
+        scale = 10.
+        fig = plt.figure(figsize=(3 * scale, scale))
+        grid = ImageGrid(
+            fig, 111, nrows_ncols=(2,3), axes_pad=0.5)
+
+        gold = ab[:, :size[0,0], :size[0,1]]
+        top5_pred = probs.topk(5, dim=1).indices == gold
+        top1, top5, num_pixels = compute_pixel_acc(probs, gold)
+        grayscale = np.stack([lab[:, :, 0] / 100.] * 3, axis=-1)
+
+        gold_lab = np.empty((size[0,0], size[0,1], 3))
+        gold_lab[:, :, 0] = lab[:, :, 0]
+
+        ab = self.test_data.index2color[ab]
+        a = ab // 25
+        b = ab % 25
+        ab_gold = 10 * torch.cat([a,b], dim=0) - 120
+        ab_gold = ab_gold.permute(1,2,0).numpy()
+        gold_lab[:, :, 1:] = ab_gold
+
+        images = [
+            ("image", grayscale),
+            ("ground truth", color.lab2rgb(gold_lab)),
+            ("colorized", colorized_rgb),
+            ("top-1", top5_pred[0,0,:,:].float()),
+            ("top-5", top5_pred.sum(dim=1)[0].float()),
+        ]
+
+        for ax, (title, im) in zip(grid, images):
+            ax.axis('off')
+            ax.set_title(title)
+            ax.imshow(im)
+        plt.show()
+        print(f"caption: {caption}")
+        print(f"top-1: {top1 / num_pixels}, top-5: {top5 / num_pixels}")

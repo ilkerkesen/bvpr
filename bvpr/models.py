@@ -60,6 +60,7 @@ class SegmentationModel(nn.Module):
             in_channels=num_channels,
             text_embedding_dim=hidden_size,
         )
+
         self.mask_predictor = MaskPredictor(
             config["mask_predictor"],
             in_channels=config["multimodal_encoder"]["num_kernels"],
@@ -75,13 +76,23 @@ class SegmentationModel(nn.Module):
         return submodule_class(config)
 
     def forward(self, image, phrase, size=None):
-        scale = sizes2scales(size, image.size())
-        vis = self.image_encoder(image, scales2sizes(scale, image.size()))
+        image_size = image.size()
+        B, C, H, W = image_size
+
+        if C == 3:
+            scale = sizes2scales(size, image_size)
+            vis = self.image_encoder(image, scales2sizes(scale, image_size))
+        else:
+            N = 2**self.image_encoder.num_downsample
+            vis = image
+            image_size = torch.Size([B, 3, N * H, N * W])
+            scale = sizes2scales(size, image_size)
+
         txt = self.text_encoder(phrase)
         joint = self.multimodal_encoder(vis, txt, scale)
-        outputs = self.mask_predictor(joint, image_size=image.shape)
+        outputs = self.mask_predictor(joint, image_size=image_size)
         return outputs
 
 
 class ColorizationModel(SegmentationModel):
-    NUM_CLASSES = 261  # FIXME: fix hardcode
+    NUM_CLASSES = 262  # FIXME: fix hardcode

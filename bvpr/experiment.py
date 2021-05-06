@@ -6,7 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from pytorch_lightning import LightningModule, LightningDataModule
+from torch.autograd import Variable
+from pytorch_lightning import LightningModule
 
 from bvpr.models import *
 from bvpr.criterion import *
@@ -158,12 +159,16 @@ class ColorizationExperiment(BaseExperiment):
     def __init__(self, config):
         super().__init__(config)
         priors = config.get("priors", None)
+        if not config.get("use_priors", False):
+            priors = None
+        if priors is not None:
+            priors = Variable(priors)
         self.criterion = nn.CrossEntropyLoss(weight=priors, ignore_index=-1)
 
     def training_step(self, batch, batch_index):
         L, caption, size, ab = batch
         scores = self(L, caption, size)
-        loss = self.criterion(scores[-1], ab.squeeze(1))
+        loss = self.criterion(scores[-1], ab)
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
@@ -173,12 +178,35 @@ class ColorizationExperiment(BaseExperiment):
     def validation_step(self, batch, batch_index):
         L, caption, size, ab = batch
         scores = self(L, caption, size)
+        loss = self.criterion(scores[-1], ab)
+        # top1, top5, num_pixels = compute_pixel_acc(scores[-1], ab)
+        num_pixels = torch.sum(ab >= 0)
+        top1 = torch.sum(scores[-1].argmax(dim=1, keepdim=False) == ab)
+
+        return {
+            "loss": loss,
+            "N": num_pixels,
+            "top1": top1,
+        }
+
+    def validation_epoch_end(self, outputs):
+        num_pixels = 0
+        total_loss = 0.0
+        top1 = 0
+
+        for output in outputs:
+            num_pixels += output["N"]
+            total_loss += output["loss"] * output["N"]
+            top1 += output["top1"]
+
+        self.log("val_loss", total_loss / num_pixels)
+        self.log("val_top1_acc", top1 / num_pixels, prog_bar=True)
+
+    def test_step(self, batch, batch_index):
+        L, caption, size, ab = batch
+        scores = self(L, caption, size)
         loss = self.criterion(scores[-1], ab.squeeze(1))
-        num_pixels = torch.sum(ab > 0).item()
-        top5_pred = scores[-1].topk(5, dim=1).indices == ab
-        num_correct = top5_pred.sum(dim=(0, 2, 3))
-        top1 = num_correct[0].item()
-        top5 = num_correct.sum().item()
+        top1, top5, num_pixels = compute_pixel_acc(scores[-1], ab)
 
         return {
             "loss": loss,
@@ -187,7 +215,7 @@ class ColorizationExperiment(BaseExperiment):
             "top5": top5,
         }
 
-    def validation_epoch_end(self, outputs):
+    def test_epoch_end(self, outputs):
         num_pixels = 0
         total_loss = 0.0
         top1 = top5 = 0
@@ -199,5 +227,5 @@ class ColorizationExperiment(BaseExperiment):
             top5 += output["top5"]
 
         self.log("val_loss", total_loss / num_pixels)
-        self.log("val_top1_acc", top1 / num_pixels)
-        self.log("val_top5_acc", top5 / num_pixels, prog_bar=True)
+        self.log("val_top1_acc", top1 / num_pixels, prog_bar=True)
+        self.log("val_top5_acc", top5 / num_pixels)
