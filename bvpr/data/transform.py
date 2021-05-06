@@ -55,4 +55,4 @@ class ABColorDiscretizer(object):
         quantized = torch.round(image / bin_size)
         quantized = quantized - (min_val / bin_size)
         discrete = quantized[0, :, :] * grid_dim + quantized[1, :, :]
-        return discrete
+        return discrete.long()

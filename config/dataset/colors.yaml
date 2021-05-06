@@ -2,3 +2,4 @@
 dataset: "colors"
 data_root: "/userfiles/ikesen16/data/colorization"
 min_occur: 5
+features_dir: "~/data/coco/lab/resnet101-2-layers"

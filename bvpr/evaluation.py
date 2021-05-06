@@ -9,6 +9,7 @@ from bvpr.util import make_mask
 __all__ = (
     "compute_iou",
     "compute_thresholded",
+    "compute_pixel_acc",
 )
 
 
@@ -35,3 +36,11 @@ def compute_thresholded(predicted, target, thresholds, size=None):
         intersection[:, idx], union[:, idx] = I, U
 
     return intersection, union
+
+
+def compute_pixel_acc(scores, gold):
+    num_pixels = torch.sum(gold >= 0)
+    topk_pred = scores.topk(5, dim=1).indices == gold.unsqueeze(1)
+    top1 = topk_pred[:, 0, :, :].sum().item()
+    top5 = topk_pred.sum().item()
+    return top1, top5, num_pixels
