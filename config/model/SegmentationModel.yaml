@@ -11,7 +11,7 @@ text_encoder:
   dropout: 0.2
 image_encoder:
   name: deeplabv3plus_resnet50
-  num_layers: 4
+  num_layers: 3
   pretrained: true
   freeze: true
 multimodal_encoder:

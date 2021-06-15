@@ -2,3 +2,4 @@
 method: Adam
 params:
   lr: 0.001
+  eps: 0.0001

@@ -95,16 +95,20 @@ class SegmentationDataModule(pl.LightningDataModule):
         return self.config["dataset"]["dataset"]
 
     def setup(self, stage=None):
+        train_split, val_split = "train", "val"
+        if self.dataset_name == "referit":
+            train_split, val_split = "trainval", "test"
+
         if stage == "fit" or stage is None:
             self.train_data = ReferDataset(
-                split="train",
+                split=train_split,
                 transform=self.train_image_transform,
                 mask_transform=self.train_mask_transform,
                 **self.config["dataset"]
             )
 
             self.val_data = ReferDataset(
-                split="val",
+                split=val_split,
                 transform=self.val_image_transform,
                 mask_transform=self.val_mask_transform,
                 **self.config["dataset"]
