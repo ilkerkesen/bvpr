@@ -148,8 +148,7 @@ class BatchConv2DLayer(nn.Module):
 
 class BatchConv2DKernelFromText(nn.Module):
     def __init__(self, in_channels, out_channels, text_dim, kernel_size,
-                       stride=1, padding=0, dilation=1,
-                       pdrop=0.1):
+        stride=1, padding=0, dilation=1, pdrop=0.1):
         super(BatchConv2DKernelFromText, self).__init__()
         self.bconv = BatchConv2DLayer(
             in_channels,
@@ -305,16 +304,14 @@ class ImageEncoder(nn.Module):
         layers = list(model.backbone.children())
         num_layers = config["num_layers"]
         self.model = nn.Sequential(*layers[:4+num_layers])
-        
+
         self.num_downsample = None
-        if num_layers < 2:
+        if num_layers < 3:
             self.num_downsample = 2
-        elif num_layers < 4:
-            self.num_downsample = 3
         else:
-            self.num_downsample = 4
-        
-        self.num_channels = 256 * 2**(num_layers-1)
+            self.num_downsample = 3
+
+        self.num_channels = min(256 * 2**(num_layers-1), 2048)
         self.num_channels += 8 * self.use_location_embeddings
 
     def setup_mobilenetv2(self, config):

@@ -12,7 +12,7 @@ from bvpr.models import SegmentationModel, ColorizationModel
 from bvpr.datamodule import SegmentationDataModule, ColorizationDataModule
 from bvpr.util import sizes2scales, scales2sizes, annealed_mean
 from bvpr.evaluation import compute_pixel_acc
-from skimage import io, color
+from skimage import color
 
 
 class SegmentationDemo(object):

@@ -5,4 +5,4 @@ trainer:
   gradient_clip_val: 0.0
   val_check_interval: 1.00
   resume_from_checkpoint: null
-  overfit_batches: 1 
+  overfit_batches: 1.0 
