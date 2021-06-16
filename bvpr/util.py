@@ -52,6 +52,7 @@ def process_config(cfg, dataset):
         cfg["mask_predictor"]["num_layers"] = predictor_num_layers
     else:
         cfg["network"]["vocab_size"] = len(dataset.corpus)
+        cfg["network"]["corpus"] = dataset.corpus
     return cfg
 
 

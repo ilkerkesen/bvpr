@@ -9,6 +9,7 @@ image_encoder:
   freeze: true
 network:
   vocab_size: null
+  glove: true
   num_classes: 262
   d_hid: 256
   d_emb: 300
