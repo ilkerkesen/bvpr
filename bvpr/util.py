@@ -47,8 +47,11 @@ def process_config(cfg, dataset):
         predictor_num_layers = encoder_num_layers + 1
     elif encoder == "mobilenetv2":
         predictor_num_layers = MOBILENET_SIZE_MAP[encoder_num_layers-1][1]
-    cfg["text_encoder"]["corpus"] = dataset.corpus
-    cfg["mask_predictor"]["num_layers"] = predictor_num_layers
+    if cfg["architecture"] != "ColorizationBaseline":
+        cfg["text_encoder"]["corpus"] = dataset.corpus
+        cfg["mask_predictor"]["num_layers"] = predictor_num_layers
+    else:
+        cfg["network"]["vocab_size"] = len(dataset.corpus)
     return cfg
 
 

@@ -1,0 +1,14 @@
+# @package _group_
+architecture: ColorizationBaseline
+multiscale: false
+use_location_embeddings: false
+image_encoder:
+  name: resnet101
+  num_layers: 2
+  pretrained: true
+  freeze: true
+network:
+  vocab_size: null
+  num_classes: 262
+  d_hid: 256
+  d_emb: 300
