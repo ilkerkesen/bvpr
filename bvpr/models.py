@@ -1,11 +1,20 @@
 # -*- coding: utf-8 -*-
 
+from bvpr.extra.colorization_baseline import AutocolorizeResnet
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from bvpr.submodules import *
 from bvpr.util import sizes2scales, scales2sizes
+
+
+__all__ = (
+    "LSTMCNNBaseline",
+    "SegmentationModel",
+    "ColorizationModel",
+    "ColorizationBaseline",
+)
 
 
 class LSTMCNNBaseline(nn.Module):
@@ -96,3 +105,24 @@ class SegmentationModel(nn.Module):
 
 class ColorizationModel(SegmentationModel):
     NUM_CLASSES = 262  # FIXME: fix hardcode
+
+
+class ColorizationBaseline(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.image_encoder = ImageEncoder(
+            config["image_encoder"],
+            config["use_location_embeddings"],
+        )
+        self.network = AutocolorizeResnet(**config["network"])
+
+    def forward(self, image, caption, size=None):
+        caption = caption.T
+        B, T = caption.shape
+        lens = torch.ones(B, dtype=torch.long) * T
+        image_size = image.size()
+        B, C, H, W = image_size
+        scale = sizes2scales(size, image_size)
+        features = self.image_encoder(image, scales2sizes(scale, image_size))
+        return self.network(features, caption, lens)
