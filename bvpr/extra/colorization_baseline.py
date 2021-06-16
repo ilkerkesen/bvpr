@@ -5,6 +5,8 @@ from torch.nn.utils.rnn import pad_packed_sequence as unpack
 from torch.nn.utils.rnn import pack_padded_sequence as pack
 from torch.nn.init import kaiming_normal, kaiming_uniform
 
+from bvpr.submodules import get_glove_vectors
+
 
 def init_modules(modules, init='uniform'):
     if init.lower() == 'normal':
@@ -19,13 +21,16 @@ def init_modules(modules, init='uniform'):
 
 
 class CaptionEncoder(nn.Module):
-    def __init__(self, word_embedding_dim, hidden_dim, vocab_size,
-                 train_vocab_embeddings):
+    def __init__(self, word_embedding_dim, hidden_dim, vocab_size, glove,
+                 corpus=None):
         super(CaptionEncoder, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, word_embedding_dim)
-        if train_vocab_embeddings is not None:
-            self.embedding.weight.data.copy_(
-                torch.from_numpy(train_vocab_embeddings))
+        if glove:
+            vectors = get_glove_vectors(corpus)
+            self.embedding = nn.Embedding.from_pretrained(vectors)
+        else:
+            self.embedding = nn.Embedding(vocab_size, word_embedding_dim)
+        # self.embedding.weight.data.copy_(
+        #     torch.from_numpy(train_vocab_embeddings))
         self.hidden_size = hidden_dim
         self.lstm = nn.LSTM(word_embedding_dim, hidden_dim, num_layers=1,
                             bidirectional=True, batch_first=True)
@@ -90,8 +95,8 @@ class FilMedResBlock(nn.Module):
 
 class AutocolorizeResnet(nn.Module):
     def __init__(self, vocab_size, feature_dim=(512, 28, 28), d_hid=256,
-                 d_emb=300, num_modules=4, num_classes=625,
-                 train_vocab_embeddings=None):
+                 d_emb=300, num_modules=4, num_classes=625, glove=True,
+                 corpus=None):
         super().__init__()
         self.num_modules = num_modules
         self.n_lstm_hidden = d_hid
@@ -100,7 +105,7 @@ class AutocolorizeResnet(nn.Module):
         self.num_classes = num_classes
         dilations = [1, 1, 1, 1]
         self.caption_encoder = CaptionEncoder(
-            d_emb, d_hid, vocab_size, train_vocab_embeddings)
+            d_emb, d_hid, vocab_size, glove, corpus)
 
         # self.function_modules = {}
         # for fn_num in range(self.num_modules):
