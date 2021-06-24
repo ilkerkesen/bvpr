@@ -114,8 +114,8 @@ class SegmentationExperiment(BaseExperiment):
 
         self.log("val_loss", total_loss / num_instances)
         self.log("threshold", threshold_val)
-        self.log("mIoU", mIoU[threshold_idx].item(), prog_bar=True)
-        self.log("cum_IoU", cum_IoU[threshold_idx].item())
+        self.log("mIoU", mIoU[threshold_idx].item())
+        self.log("cum_IoU", cum_IoU[threshold_idx].item(), prog_bar=True)
         for (th, pr) in zip(self.IoU_thresholds.tolist()[0], this_precision):
             self.log("precision@{:.2f}".format(th), pr)
 

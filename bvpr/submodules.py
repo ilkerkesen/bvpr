@@ -314,6 +314,26 @@ class ImageEncoder(nn.Module):
         self.num_channels = min(256 * 2**(num_layers-1), 2048)
         self.num_channels += 8 * self.use_location_embeddings
 
+    def setup_deeplabv3plus_resnet101(self, config):
+        cache_dir = osp.abspath(osp.expanduser("~/.cache/torch/checkpoints"))
+        filename = "best_deeplabv3plus_resnet101_voc_os16.pth"
+        filepath = osp.join(cache_dir, filename)
+        ckpt = torch.load(filepath)
+        model = deeplab.deeplabv3plus_resnet101()
+        model.load_state_dict(ckpt["model_state"])
+        layers = list(model.backbone.children())
+        num_layers = config["num_layers"]
+        self.model = nn.Sequential(*layers[:4+num_layers])
+
+        if num_layers == 1:
+            self.num_downsample = 2
+        else:
+            self.num_downsample = 3
+
+        self.num_channels = min(256 * 2**(num_layers-1), 2048)
+        self.num_channels += 8 * self.use_location_embeddings
+
+
     def setup_mobilenetv2(self, config):
         model = torch.hub.load(
             "pytorch/vision:v0.8.2",
