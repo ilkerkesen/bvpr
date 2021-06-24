@@ -1,4 +1,4 @@
-seed: 1
+seed: 42
 image_size: 512
 
 defaults:
