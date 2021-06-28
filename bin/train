@@ -32,9 +32,7 @@ def main(config):
 
     # data
     train_data = Dataset(split="train", **config["dataset"])
-    val_data = Dataset(split="val", **config["dataset"])
     config["model"] = process_config(config["model"], train_data)
-    # model = LSTMCNNBaseline(config["model"])
 
     # logger
     config["logger"]["save_dir"] = osp.abspath(

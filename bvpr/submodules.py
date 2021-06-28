@@ -22,6 +22,7 @@ __all__ = (
     "MaskPredictor",
     "ImageEncoder",
     "MultimodalEncoder",
+    "SegmentationHead",
 )
 
 
@@ -333,7 +334,6 @@ class ImageEncoder(nn.Module):
         self.num_channels = min(256 * 2**(num_layers-1), 2048)
         self.num_channels += 8 * self.use_location_embeddings
 
-
     def setup_mobilenetv2(self, config):
         model = torch.hub.load(
             "pytorch/vision:v0.8.2",
@@ -546,3 +546,52 @@ class UnconditionalLayer(nn.Module):
 
     def forward(self, feature_map, condition):
         return feature_map
+
+
+class ArgMax(nn.Module):
+    def __init__(self, dim=None):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        return torch.argmax(x, dim=self.dim)
+
+
+class Activation(nn.Module):
+    def __init__(self, name, **params):
+        super().__init__()
+
+        if name is None or name == 'identity':
+            self.activation = nn.Identity(**params)
+        elif name == 'sigmoid':
+            self.activation = nn.Sigmoid()
+        elif name == 'softmax2d':
+            self.activation = nn.Softmax(dim=1, **params)
+        elif name == 'softmax':
+            self.activation = nn.Softmax(**params)
+        elif name == 'logsoftmax':
+            self.activation = nn.LogSoftmax(**params)
+        elif name == 'tanh':
+            self.activation = nn.Tanh()
+        elif name == 'argmax':
+            self.activation = ArgMax(**params)
+        elif name == 'argmax2d':
+            self.activation = ArgMax(dim=1, **params)
+        elif callable(name):
+            self.activation = name(**params)
+        else:
+            raise ValueError('Activation should be callable/sigmoid/softmax/logsoftmax/tanh/None; got {}'.format(name))
+
+    def forward(self, x):
+        return self.activation(x)
+
+
+class SegmentationHead(nn.Sequential):
+    def __init__(self, in_channels, out_channels, kernel_size=3, activation=None, upsampling=1):
+        conv2d = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, padding=kernel_size // 2)
+        upsampling = nn.UpsamplingBilinear2d(scale_factor=upsampling) if upsampling > 1 else nn.Identity()
+        activation = Activation(activation)
+        super().__init__(conv2d, upsampling, activation)
+
+    def forward(self, *args, image_size=None, **kwargs):
+        return super().forward(*args, **kwargs)

@@ -104,7 +104,15 @@ class SegmentationModel(nn.Module):
 
 
 class ColorizationModel(SegmentationModel):
-    NUM_CLASSES = 262  # FIXME: fix hardcode
+    NUM_CLASSES = 625  # FIXME: fix hardcode
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.mask_predictor = SegmentationHead(
+            self.config["multimodal_encoder"]["num_kernels"],
+            self.config["mask_predictor"]["num_classes"],
+            upsampling=2,
+        )
 
 
 class ColorizationBaseline(nn.Module):

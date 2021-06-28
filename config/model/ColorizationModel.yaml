@@ -18,7 +18,7 @@ multimodal_encoder:
   topdown: true
   bottomup: true
   num_layers: 4
-  num_kernels: 128
+  num_kernels: 512
   connected: true
   kernel_size: 5
   stride: 2
@@ -30,3 +30,4 @@ mask_predictor:
   kernel_size: 5
   stride: 2
   padding: 2
+  num_classes: null

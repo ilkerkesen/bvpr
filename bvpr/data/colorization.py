@@ -125,19 +125,18 @@ class ColorizationDataset(Dataset):
         caption = item["caption"]
         if self.tokenize:
             caption = self.tokenize_caption(caption)
-        
+
         image_path = self.image_dict[item["image_id"]]["file_name"]
         image = self.read_rgb_image(image_path)
         if self.transform is not None:
             image = self.transform(image)
-        im_h, im_w = image.shape[:2]
+        im_h, im_w = image.shape[1:]
         size = torch.tensor([im_h, im_w])
 
-        L = image[:, :, 0]
         if self.L_transform is not None:
-            L = self.L_transform(L)
+            L = self.L_transform(image)
 
-        ab = image[:, :, 1:]
+        ab = image
         if self.ab_transform is not None:
             ab = self.ab_transform(ab)
             if self.reduce_colors:

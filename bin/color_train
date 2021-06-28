@@ -31,7 +31,12 @@ def main(config):
     # data
     train_data = Dataset(split="train", **config["dataset"])
     config["model"] = process_config(config["model"], train_data)
-    config["priors"] = train_data.priors
+    if train_data.reduce_colors:
+        config["priors"] = train_data.priors
+    else:
+        config["priors"] = train_data.raw_priors
+    num_colors = config["priors"].numel()
+    config["model"]["mask_predictor"]["num_classes"] = num_colors
 
     # logger
     config["logger"]["save_dir"] = osp.abspath(

@@ -168,7 +168,8 @@ class ColorizationExperiment(BaseExperiment):
     def training_step(self, batch, batch_index):
         L, caption, size, ab = batch
         scores = self(L, caption, size)
-        loss = self.criterion(scores[-1], ab)
+        scores = F.interpolate(scores, scale_factor=4, mode="bilinear")
+        loss = self.criterion(scores, ab)
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
@@ -178,10 +179,10 @@ class ColorizationExperiment(BaseExperiment):
     def validation_step(self, batch, batch_index):
         L, caption, size, ab = batch
         scores = self(L, caption, size)
-        loss = self.criterion(scores[-1], ab)
+        loss = self.criterion(scores, ab)
         # top1, top5, num_pixels = compute_pixel_acc(scores[-1], ab)
         num_pixels = torch.sum(ab >= 0)
-        top1 = torch.sum(scores[-1].argmax(dim=1, keepdim=False) == ab)
+        top1 = torch.sum(scores.argmax(dim=1, keepdim=False) == ab)
 
         return {
             "loss": loss,

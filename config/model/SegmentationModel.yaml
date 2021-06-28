@@ -18,7 +18,7 @@ multimodal_encoder:
   topdown: true
   bottomup: true
   num_layers: 4
-  num_kernels: 128
+  num_kernels: 512
   connected: true
   kernel_size: 5
   stride: 2
@@ -26,7 +26,7 @@ multimodal_encoder:
   text_kernel_size: 1  
   layer: "conv"  # or film
 mask_predictor:
-  num_channels: 128
+  num_channels: 512
   kernel_size: 5
   stride: 2
   padding: 2

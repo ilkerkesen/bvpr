@@ -15,7 +15,7 @@ criterion: "MaskedMultiScaleBCELoss"
 loader:
   batch_size: 32
   pin_memory: false
-  num_workers: 16
+  num_workers: 5
 
 # logger (tensorboard)
 logger:
@@ -30,8 +30,6 @@ checkpoint:
   verbose: true
   monitor: "cum_IoU"
   mode: "max"
-  prefix: ""
-  filepath: null
 
 # resume training
 checkpoint_path: null

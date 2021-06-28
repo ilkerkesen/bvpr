@@ -31,8 +31,6 @@ checkpoint:
   verbose: true
   monitor: "val_top1_acc"
   mode: "max"
-  prefix: ""
-  filepath: null
 
 # resume training
 checkpoint_path: null

@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms as ts
 import pytorch_lightning as pl
 from skimage import color
+from torchvision.transforms.transforms import Grayscale
 
 from bvpr.data.transform import ABColorDiscretizer, PadBottomRight, DownsizeImage
 from bvpr.data.refexp import ReferDataset
@@ -23,26 +24,29 @@ def make_input_transform(normalizer, image_dim):
 
 def make_L_transform(normalizer, image_dim):
     return ts.Compose([
-        ts.Lambda(lambda x: np.stack([x / 100.] * 3, axis=-1)),
-        ts.ToTensor(),
+        ts.Grayscale(num_output_channels=3),
         normalizer,
     ])
 
 
 def make_ab_transform(image_dim):
     return ts.Compose([
+        ts.Resize(image_dim),
+        ts.Lambda(lambda x: x.permute(1, 2, 0)),
+        ts.Lambda(lambda x: color.rgb2lab(x)),
+        ts.Lambda(lambda x: x[:, :, 1:]),
         ts.ToTensor(),
         ABColorDiscretizer(),
     ])
 
 
-def make_lab_transform(image_dim, crop_transform):
+def make_rgb_transform(image_dim, crop_transform):
     return ts.Compose([
         ts.ToTensor(),
         ts.Resize(image_dim),
         crop_transform(image_dim),
-        ts.Lambda(lambda x: x.permute(1, 2, 0)),
-        ts.Lambda(lambda x: color.rgb2lab(x)),
+        # ts.Lambda(lambda x: x.permute(1, 2, 0)),
+        # ts.Lambda(lambda x: color.rgb2lab(x)),
     ])
 
 
@@ -166,7 +170,7 @@ def collate_fn(task="segmentation"):
             target = target.float()
         elif task == "colorization":
             target = target.long()
-        return input.float(), text, size, target
+        return input.half(), text, size, target
     return collate_fn
 
 
@@ -175,23 +179,24 @@ class ColorizationDataModule(pl.LightningDataModule):
         super().__init__()
         self.config = config
 
-        image_dim = config["image_size"]
+        # image_dim = config["image_size"]
+        image_dim = 224
         normalizer = ts.Normalize(
             mean=[0.485, 0.456, 0.406],
             std=[0.229, 0.224, 0.225])
 
-        self.train_lab_transform = make_lab_transform(image_dim, ts.RandomCrop)
-        self.val_lab_transform = make_lab_transform(image_dim, ts.CenterCrop)
+        self.train_rgb_transform = make_rgb_transform(image_dim, ts.RandomCrop)
+        self.val_rgb_transform = make_rgb_transform(image_dim, ts.CenterCrop)
         self.train_L_transform = make_L_transform(normalizer, image_dim)
         self.val_L_transform = make_L_transform(normalizer, image_dim)
         self.train_ab_transform = make_ab_transform(image_dim)
-        self.val_ab_transform = make_ab_transform(image_dim)
+        self.val_ab_transform = make_ab_transform(image_dim // 4)
 
     def setup(self, stage=None):
         if stage == "fit" or stage is None:
             self.train_data = ColorizationDataset(
                 split="train",
-                transform=self.train_lab_transform,
+                transform=self.train_rgb_transform,
                 L_transform=self.train_L_transform,
                 ab_transform=self.train_ab_transform,
                 **self.config["dataset"]
@@ -199,7 +204,7 @@ class ColorizationDataModule(pl.LightningDataModule):
 
             self.val_data = ColorizationDataset(
                 split="val",
-                transform=self.val_lab_transform,
+                transform=self.val_rgb_transform,
                 L_transform=self.val_L_transform,
                 ab_transform=self.val_ab_transform,
                 **self.config["dataset"]
@@ -208,7 +213,7 @@ class ColorizationDataModule(pl.LightningDataModule):
         if stage == "test" or stage is None:
             self.test_data = ColorizationDataset(
                 split="val",
-                transform=self.val_lab_transform,
+                transform=self.val_rgb_transform,
                 L_transform=self.val_L_transform,
                 ab_transform=self.val_ab_transform,
                 **self.config["dataset"]
