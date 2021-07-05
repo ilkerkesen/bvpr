@@ -35,8 +35,10 @@ def main(config):
         config["priors"] = train_data.priors
     else:
         config["priors"] = train_data.raw_priors
-    num_colors = config["priors"].numel()
-    config["model"]["mask_predictor"]["num_classes"] = num_colors
+
+    if config["model"].get("mask_predictor", None) is not None:
+        num_colors = config["priors"].numel()
+        config["model"]["mask_predictor"]["num_classes"] = num_colors
 
     # logger
     config["logger"]["save_dir"] = osp.abspath(

@@ -25,7 +25,7 @@ logger:
 
 # checkpoint
 checkpoint:
-  save_top_k: 3
+  save_top_k: 1
   save_last: true
   verbose: true
   monitor: "cum_IoU"

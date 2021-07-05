@@ -144,7 +144,7 @@ class LanguageFiltersDemo(SegmentationDemo):
                 b_ = b.detach().cpu().numpy()
                 val = euclidean(a_, b_) / np.sqrt(a_.size)
                 heatmap[i, j+len(original)] = val
- 
+
         for i, (layer, txt) in enumerate(zip(top_down_layers, original)):
             top_down_original.append(layer.dense(txt))
 
@@ -156,7 +156,7 @@ class LanguageFiltersDemo(SegmentationDemo):
                 b_ = b.detach().cpu().numpy()
                 val = euclidean(a_, b_) / np.sqrt(a_.size)
                 heatmap[i, j+2*len(original)] = val
-         
+
         if normalize:
             minv, maxv = heatmap.min(), heatmap.max()
             heatmap = (heatmap - minv) / (maxv - minv)
@@ -235,13 +235,12 @@ class MaximumActivatedPatchesDemo(SegmentationDemo):
                              for x in bottom_up_outputs]
         top_down_outputs = [self.get_attention_map(x, size, thresholded=thresholded)
                            for x in top_down_outputs][::-1]
-        # top_down_outputs.append(bottom_up_outputs[-1])
+        top_down_outputs.append(bottom_up_outputs[-1])
 
         scale = 15.
         fig = plt.figure(figsize=(3 * scale, scale))
         grid = ImageGrid(
             fig, 111, nrows_ncols=(1+len(bottom_up_outputs), 3), direction="column", axes_pad=(0.1, 0.3))
-
 
         images = [("image", image)]
         for i, output in enumerate(bottom_up_outputs):
@@ -250,12 +249,18 @@ class MaximumActivatedPatchesDemo(SegmentationDemo):
         for i, output in enumerate(top_down_outputs):
             images.append((f"top-down #{i}", output))
         images.append(("true mask", gold))
+
+        # FIXME: I should not have need something like this,
+        #   but, matplotlib/ImageGrid behaves unresaonable.
+        for i in range(len(bottom_up_outputs)):
+            images.append(("dummy", torch.zeros(bottom_up_outputs[i].shape)))
+
         for ax in grid:
             ax.axis('off')
         for ax, (title, im) in zip(grid, images):
-            ax.axis('off')
-            ax.set_title(title)
-            ax.imshow(im)
+            if im is not None:
+                ax.set_title(title)
+                ax.imshow(im)
         plt.show()
         print(f"phrase: {phrase}")
 
@@ -282,7 +287,7 @@ class WordRemovalActivationDemo(SegmentationDemo):
         img = test_data.transform(image).to(self.device).unsqueeze(0)
         txt = test_data.tokenize_phrase(phrase).to(self.device).unsqueeze(1)
         size = size.unsqueeze(0)
-        
+
         phrases = []
         for idx in range(len(phrase.split())):
             this = phrase.split()
@@ -294,16 +299,17 @@ class WordRemovalActivationDemo(SegmentationDemo):
             if this == "":
                 this = "UNK"
             phrases.append(this)
-        
 
-        bu, td = self.generate_feature_maps(img, phrase, size, datasplit_id)
+        bu, td, pred = self.generate_feature_maps(img, phrase, size, datasplit_id)
         heatmaps = np.empty((2, len(bu), len(phrases)), dtype=object)
+        predicted = [("predicted", pred)]
         for i, phrase_ in enumerate(phrases):
-            bu_, td_ = self.generate_feature_maps(img, phrase_, size, datasplit_id)
+            bu_, td_, pred_ = self.generate_feature_maps(img, phrase_, size, datasplit_id)
             bu_diff = [self.process_differences(o, o_, size) for (o,o_) in zip(bu, bu_)]
             td_diff = [self.process_differences(o, o_, size) for (o,o_) in zip(td, td_)]
             heatmaps[0,:,i] = bu_diff
             heatmaps[1,:,i] = td_diff
+            predicted.append(("predicted", pred_))
 
         scale = 15.
         fig = plt.figure(figsize=(3 * scale, scale))
@@ -312,15 +318,15 @@ class WordRemovalActivationDemo(SegmentationDemo):
 
         images = []
         image_ = ("image", image)
-        predicted = ("predicted", self.predict(img, txt, size))
+        # predicted = ("predicted", self.predict(img, txt, size))
         for i in range(len(phrases)):
             images.append(image_)
             for j in range(len(bu)):
                 images.append(("...", heatmaps[0,j,i]))
-            images.append(predicted)
+            images.append(predicted[i])
             for j in range(len(td)):
                 images.append(("...", heatmaps[1,j,i]))
-                
+
         for ax in grid:
             ax.axis('off')
         for ax, (title, im) in zip(grid, images):
@@ -329,7 +335,7 @@ class WordRemovalActivationDemo(SegmentationDemo):
             ax.imshow(im)
         plt.show()
         print(f"phrase: {phrase}")
-        
+
     def process_differences(self, t1, t2, size):
         diff = torch.mean((t1-t2)**2, dim=1)
         normalized = self.normalize(diff).unsqueeze(0)
@@ -338,10 +344,10 @@ class WordRemovalActivationDemo(SegmentationDemo):
         t = t.view(image_size, image_size)
         h, w = size.flatten().numpy()
         return t[:h, :w]
-        
+
     def normalize(self, arr):
         return (arr - arr.min()) / (arr.max() - arr.min() + 1e-6)
-        
+
     def generate_feature_maps(self, img, phrase, size, datasplit_id):
         test_data = self.data_module.test_datasplits[datasplit_id]
         txt = test_data.tokenize_phrase(phrase).to(self.device).unsqueeze(1)
@@ -359,9 +365,16 @@ class WordRemovalActivationDemo(SegmentationDemo):
         ]
         bu = model.multimodal_encoder.bottom_up(vis, parted, scale)
         td = model.multimodal_encoder.top_down(bu, parted)[::-1]
-        bu = [x.detach().cpu() for x in bu[1:]]
+        image_size = img.size()
+        h, w = size.flatten().numpy()
+        predicted = model.mask_predictor(td[0], image_size=image_size)[-1]
+        predicted = predicted.squeeze()
+        predicted = torch.sigmoid(predicted) >= self.threshold
+        predicted = predicted[:h, :w].float().detach().cpu()
+        bu = [x.detach().cpu() for x in bu]
         td = [x.detach().cpu() for x in td]
-        return bu, td
+        td.append(bu[-1])
+        return bu, td, predicted
 
 
 class ColorizationDemo(object):

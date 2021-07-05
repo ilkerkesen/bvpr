@@ -133,4 +133,4 @@ class ColorizationBaseline(nn.Module):
         B, C, H, W = image_size
         scale = sizes2scales(size, image_size)
         features = self.image_encoder(image, scales2sizes(scale, image_size))
-        return self.network(features, caption, lens)
+        return self.network(features, caption, lens)[-1]

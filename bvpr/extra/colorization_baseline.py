@@ -124,7 +124,6 @@ class AutocolorizeResnet(nn.Module):
         # out = F.relu(self.conv1(out)) # 2x512x28x28
         self.dense_film_4 = nn.Linear(self.n_lstm_hidden*2, self.in_dim*2)
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear')
-        self.extra_upsample = nn.Upsample(scale_factor=4, mode='bilinear')
 
         self.classifier = nn.Conv2d(
             512, self.num_classes, kernel_size=1, stride=1, dilation=1)    
@@ -149,6 +148,5 @@ class AutocolorizeResnet(nn.Module):
         out_last = self.mod4(out, gammas4, betas4)
 
         out = self.upsample(out_last)
-        out = self.extra_upsample(out)
         out = self.classifier(out)
         return out_last, out
