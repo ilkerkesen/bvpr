@@ -166,10 +166,11 @@ class ColorizationExperiment(BaseExperiment):
         self.criterion = nn.CrossEntropyLoss(weight=priors, ignore_index=-1)
 
     def training_step(self, batch, batch_index):
-        L, caption, size, ab = batch
-        scores = self(L, caption, size)
-        scores = F.interpolate(scores, scale_factor=4, mode="bilinear")
-        loss = self.criterion(scores, ab)
+        # L, caption, size, ab = batch
+        features, caption, caption_l, target = batch
+        scores = self(features, caption, caption_l)
+        # scores = F.interpolate(scores, scale_factor=4, mode="bilinear")
+        loss = self.criterion(scores, target)
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
@@ -177,12 +178,13 @@ class ColorizationExperiment(BaseExperiment):
         self.log("trn_loss", loss)
 
     def validation_step(self, batch, batch_index):
-        L, caption, size, ab = batch
-        scores = self(L, caption, size)
-        loss = self.criterion(scores, ab)
+        # L, caption, size, ab = batch
+        features, caption, caption_l, target = batch
+        scores = self(features, caption, caption_l)
+        loss = self.criterion(scores, target)
         # top1, top5, num_pixels = compute_pixel_acc(scores[-1], ab)
-        num_pixels = torch.sum(ab >= 0)
-        top1 = torch.sum(scores.argmax(dim=1, keepdim=False) == ab)
+        num_pixels = target.numel()
+        top1 = torch.sum(scores.argmax(dim=1, keepdim=False) == target)
 
         return {
             "loss": loss,

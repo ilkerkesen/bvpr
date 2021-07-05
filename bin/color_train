@@ -13,7 +13,7 @@ import hydra
 from omegaconf import OmegaConf
 
 from bvpr.util import process_config, create_callbacks
-from bvpr.data.colorization import ColorizationDataset as Dataset
+from bvpr.data.colorization import ColorizationReferenceDataset as Dataset
 from bvpr.experiment import ColorizationExperiment as Experiment
 from bvpr.datamodule import ColorizationDataModule as DataModule
 
@@ -30,7 +30,7 @@ def main(config):
 
     # data
     train_data = Dataset(split="train", **config["dataset"])
-    config["model"] = process_config(config["model"], train_data)
+    config["model"] = process_config(config["model"], train_data, task="colorization")
     if train_data.reduce_colors:
         config["priors"] = train_data.priors
     else:
@@ -54,6 +54,7 @@ def main(config):
     config["trainer"]["resume_from_checkpoint"] = ckpt_path
     experiment = Experiment(config)
     datamodule = DataModule(config)
+    datamodule.setup(stage="fit")
     trainer = pl.Trainer(
         logger=logger,
         callbacks=callbacks,

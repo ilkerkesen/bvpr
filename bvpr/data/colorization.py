@@ -3,6 +3,9 @@ import os.path as osp
 from functools import reduce
 
 import json
+import cv2
+import h5py
+import pickle
 import numpy as np
 from tqdm import tqdm
 from skimage import io, color
@@ -143,3 +146,101 @@ class ColorizationDataset(Dataset):
                 ab = self.color2index[ab]
         return L, ab, size, caption
 
+
+class ColorizationReferenceDataset(Dataset):
+    def __init__(self, data_root, split="train", max_query_len=20,
+                 transform=None, reduce_colors=False, **kwargs):
+        self.data_root = osp.abspath(osp.expanduser(data_root))
+        self.split = split
+        self.reduce_colors = reduce_colors
+        self.data_file_path = osp.join(self.data_root, "coco_colors.h5")
+        self.features_file_path = osp.join(self.data_root, "image_features.h5")
+        self.priors_path = osp.join(
+            self.data_root, "coco_priors_onehot_625.npy")
+        self.raw_priors = torch.from_numpy(
+            prior_boosting(self.priors_path, 1.0, 0.5)).float()
+        self.num_colors = self.raw_priors.numel()
+        self.data_file = h5py.File(self.data_file_path, "r")
+        self.features_file = h5py.File(self.features_file_path, "r")
+        self.lookup_enc = LookupEncode(
+            osp.join(self.data_root, "full_lab_grid_10.npy"))
+        self.vocab = pickle.load(
+            open(osp.join(self.data_root, "coco_colors_vocab.p"), "rb"))
+        self.embeddings = pickle.load(
+            open(osp.join(self.data_root, "w2v_embeddings_colors.p"), "rb"),
+            encoding="iso-8859-1")
+        self.embeddings = torch.tensor(self.embeddings, dtype=torch.float)
+
+        self.ab_mask = self.raw_priors > 0
+        self.color2index = -torch.ones(self.num_colors).long()
+        self.color2index[self.ab_mask] = torch.arange(self.ab_mask.sum())
+        self.index2color = torch.arange(self.num_colors)[self.ab_mask]
+        self.priors = self.raw_priors[self.raw_priors > 0]
+
+    def __len__(self):
+        return self.data_file[f"{self.split}_words"].shape[0]
+
+    def __getitem__(self, index):
+        image = self.data_file[f"{self.split}_ims"][index]
+        target = cvrgb2lab(image)[::4, ::4, 1:]  # FIXME: this is not mine!
+        target = self.lookup_enc.encode_points(target)
+        target = torch.tensor(target).long()
+        features = self.features_file[f"{self.split}_features"][index]
+        caption = self.data_file[f"{self.split}_words"][index]
+        caption_len = self.data_file[f"{self.split}_length"][index]
+
+        if self.reduce_colors:
+            target = self.color2index[target]
+
+        return (
+            torch.tensor(features),
+            torch.tensor(caption.astype("long")),
+            caption_len,
+            target,
+        )
+
+
+class LookupEncode(object):
+    '''Encode points using lookups'''
+    def __init__(self, km_filepath=''):
+        self.cc = np.load(km_filepath)
+        self.offset = np.abs(np.amin(self.cc)) + 17 # add to get rid of negative numbers
+        self.x_mult = 59 # differentiate x from y
+        self.labels = {}
+        for idx, (x,y) in enumerate(self.cc):
+            x += self.offset
+            x *= self.x_mult
+            y += self.offset
+            self.labels[x+y] = idx
+
+    # returns bsz x 224 x 224 of bin labels (625 possible labels)
+    def encode_points(self, pts_nd, grid_width=10):
+
+        pts_flt = pts_nd.reshape((-1, 2))
+
+        # round AB coordinates to nearest grid tick
+        pgrid = np.round(pts_flt / grid_width) * grid_width
+
+        # get single number by applying offsets
+        pvals = pgrid + self.offset
+        pvals = pvals[:, 0] * self.x_mult + pvals[:, 1]
+
+        labels = np.zeros(pvals.shape,dtype='int32')
+
+        # lookup in label index and assign values
+        for k in self.labels:
+            labels[pvals == k] = self.labels[k]
+
+        return labels.reshape(pts_nd.shape[:-1])
+
+    # return lab grid marks from probability distribution over bins
+    def decode_points(self, pts_enc):
+        print(pts_enc)
+        return pts_enc.dot(self.cc)
+
+
+def cvrgb2lab(img_rgb):
+    cv_im_lab = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2LAB).astype('float32')
+    cv_im_lab[:, :, 0] *= (100. / 255)
+    cv_im_lab[:, :, 1:] -= 128.
+    return cv_im_lab

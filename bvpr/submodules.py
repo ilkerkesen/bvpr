@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.utils.rnn import pack_padded_sequence
 from torchvision.models import resnet18, resnet50, resnet101
 from torchtext.vocab import GloVe
 
@@ -15,6 +16,7 @@ from bvpr.extra import deeplab
 
 
 GLOVE_DIM = 300
+W2V_DIM = 300
 
 
 __all__ = (
@@ -23,6 +25,7 @@ __all__ = (
     "ImageEncoder",
     "MultimodalEncoder",
     "SegmentationHead",
+    "CaptionEncoder",
 )
 
 
@@ -192,6 +195,29 @@ class LSTMEncoder(nn.Module):
 
     def forward(self, x):
         return self.lstm(self.embedding(x))
+    
+
+class CaptionEncoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        if config.get("w2v", False):
+            config["embedding_dim"] = W2V_DIM
+            self.embedding = nn.Embedding.from_pretrained(config["vectors"])
+            del config["vectors"]
+        else:
+            self.embedding = nn.Embedding(
+                num_embeddings=config["num_embeddings"],
+                embedding_dim=config["embedding_dim"],
+                padding_idx=0)
+        self.lstm = nn.LSTM(
+            config["embedding_dim"],
+            config["hidden_size"],
+            batch_first=True)
+        self.config = config
+
+    def forward(self, x, x_l):
+        embed = pack_padded_sequence(self.embedding(x), x_l, batch_first=True) 
+        return self.lstm(embed)
 
 
 class MaskPredictor(nn.Module):
@@ -362,7 +388,7 @@ class MultimodalEncoder(nn.Module):
         self.bottom_up = BottomUpEncoder(self.config)
         self.top_down = TopDownEncoder(self.config)
 
-    def forward(self, visual, textual, scale):
+    def forward(self, visual, textual):
         # split text embedding
         hidden = textual[1][0].squeeze(0)
         hidden_size = self.config["text_embedding_dim"] // self.config["num_layers"]
@@ -370,7 +396,7 @@ class MultimodalEncoder(nn.Module):
             hidden[:, i*hidden_size:(i+1)*hidden_size]
             for i in range(self.config["num_layers"])
         ]
-        y = self.bottom_up(visual, parted, scale)
+        y = self.bottom_up(visual, parted)
         y = self.top_down(y, parted)
         return y[-1]
 
@@ -450,7 +476,7 @@ class BottomUpEncoder(nn.Module):
 
         self.config = deepcopy(config)
 
-    def forward(self, vis, txt, scale):
+    def forward(self, vis, txt):
         packed = zip(txt, self.layers, self.conditional_layers)
         num_layers = len(self.layers)
         outputs, visual_branch = [vis], [vis]

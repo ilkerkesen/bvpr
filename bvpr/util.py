@@ -33,7 +33,7 @@ __all__ = (
 )
 
 
-def process_config(cfg, dataset):
+def process_config(cfg, dataset, task="segmentation"):
     cfg = deepcopy(cfg)
     encoder = cfg["image_encoder"]["name"]
     encoder_num_layers = cfg["image_encoder"]["num_layers"]
@@ -47,12 +47,17 @@ def process_config(cfg, dataset):
         predictor_num_layers = encoder_num_layers + 1
     elif encoder == "mobilenetv2":
         predictor_num_layers = MOBILENET_SIZE_MAP[encoder_num_layers-1][1]
-    if cfg["architecture"] != "ColorizationBaseline":
+
+    if task == "segmentation":
         cfg["text_encoder"]["corpus"] = dataset.corpus
         cfg["mask_predictor"]["num_layers"] = predictor_num_layers
-    else:
+    elif cfg["architecture"] == "ColorizationModel":
+        cfg["mask_predictor"]["num_layers"] = predictor_num_layers
+        cfg["text_encoder"]["vectors"] = dataset.embeddings
+    elif cfg["architecture"] == "ColorizationBaseline":
         cfg["network"]["vocab_size"] = len(dataset.corpus)
         cfg["network"]["corpus"] = dataset.corpus
+
     return cfg
 
 
