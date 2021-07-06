@@ -55,8 +55,7 @@ def process_config(cfg, dataset, task="segmentation"):
         cfg["mask_predictor"]["num_layers"] = predictor_num_layers
         cfg["text_encoder"]["vectors"] = dataset.embeddings
     elif cfg["architecture"] == "ColorizationBaseline":
-        cfg["network"]["vocab_size"] = len(dataset.corpus)
-        cfg["network"]["corpus"] = dataset.corpus
+        cfg["vectors"] = dataset.embeddings
 
     return cfg
 

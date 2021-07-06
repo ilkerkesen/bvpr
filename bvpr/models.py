@@ -140,14 +140,9 @@ class ColorizationBaseline(nn.Module):
             config["image_encoder"],
             config["use_location_embeddings"],
         )
-        self.network = AutocolorizeResnet(**config["network"])
+        self.network = AutocolorizeResnet(vectors=config["vectors"], **config["network"])
+        del config["vectors"]
 
-    def forward(self, image, caption, size=None):
-        caption = caption.T
-        B, T = caption.shape
-        lens = torch.ones(B, dtype=torch.long) * T
-        image_size = image.size()
-        B, C, H, W = image_size
-        scale = sizes2scales(size, image_size)
-        features = self.image_encoder(image, scales2sizes(scale, image_size))
-        return self.network(features, caption, lens)[-1]
+    def forward(self, features, caption, caption_l):
+        output = self.network(features, caption, caption_l)
+        return output[-1]

@@ -195,7 +195,7 @@ class LSTMEncoder(nn.Module):
 
     def forward(self, x):
         return self.lstm(self.embedding(x))
-    
+
 
 class CaptionEncoder(nn.Module):
     def __init__(self, config):
@@ -212,6 +212,7 @@ class CaptionEncoder(nn.Module):
         self.lstm = nn.LSTM(
             config["embedding_dim"],
             config["hidden_size"],
+            bidirectional=config.get("bidirectional", False),
             batch_first=True)
         self.config = config
 

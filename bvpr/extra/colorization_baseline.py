@@ -5,7 +5,7 @@ from torch.nn.utils.rnn import pad_packed_sequence as unpack
 from torch.nn.utils.rnn import pack_padded_sequence as pack
 from torch.nn.init import kaiming_normal, kaiming_uniform
 
-from bvpr.submodules import get_glove_vectors
+from bvpr.submodules import get_glove_vectors, CaptionEncoder
 
 
 def init_modules(modules, init='uniform'):
@@ -18,36 +18,6 @@ def init_modules(modules, init='uniform'):
     for m in modules:
         if isinstance(m, (nn.Conv2d, nn.Linear)):
             init_params(m.weight)
-
-
-class CaptionEncoder(nn.Module):
-    def __init__(self, word_embedding_dim, hidden_dim, vocab_size, glove,
-                 corpus=None):
-        super(CaptionEncoder, self).__init__()
-        if glove:
-            vectors = get_glove_vectors(corpus)
-            self.embedding = nn.Embedding.from_pretrained(vectors)
-        else:
-            self.embedding = nn.Embedding(vocab_size, word_embedding_dim)
-        # self.embedding.weight.data.copy_(
-        #     torch.from_numpy(train_vocab_embeddings))
-        self.hidden_size = hidden_dim
-        self.lstm = nn.LSTM(word_embedding_dim, hidden_dim, num_layers=1,
-                            bidirectional=True, batch_first=True)
-        self.dropout = nn.Dropout(p=0.2)
-
-    def forward(self, captions, lens):
-        bsz, max_len = captions.size()
-        embeds = self.dropout(self.embedding(captions))
-
-        lens, indices = torch.sort(lens, 0, True)
-        _, (enc_hids, _) = self.lstm(
-            pack(embeds[indices], lens.tolist(), batch_first=True))
-        enc_hids = torch.cat( (enc_hids[0], enc_hids[1]), 1)
-        _, _indices = torch.sort(indices, 0)
-        enc_hids = enc_hids[_indices]
-
-        return enc_hids
 
 
 class FiLM(nn.Module):
@@ -96,7 +66,7 @@ class FilMedResBlock(nn.Module):
 class AutocolorizeResnet(nn.Module):
     def __init__(self, vocab_size, feature_dim=(512, 28, 28), d_hid=256,
                  d_emb=300, num_modules=4, num_classes=625, glove=True,
-                 corpus=None):
+                 vectors=None, **kwargs):
         super().__init__()
         self.num_modules = num_modules
         self.n_lstm_hidden = d_hid
@@ -104,8 +74,15 @@ class AutocolorizeResnet(nn.Module):
         self.in_dim = feature_dim[0]
         self.num_classes = num_classes
         dilations = [1, 1, 1, 1]
-        self.caption_encoder = CaptionEncoder(
-            d_emb, d_hid, vocab_size, glove, corpus)
+        cfg = {
+            "vectors": vectors,
+            "num_embedding": vocab_size,
+            "embedding_dim": d_emb,
+            "hidden_size": d_hid,
+            "w2v": True,
+            "bidirectional": True,
+        } 
+        self.caption_encoder = CaptionEncoder(cfg)
 
         # self.function_modules = {}
         # for fn_num in range(self.num_modules):
@@ -130,6 +107,9 @@ class AutocolorizeResnet(nn.Module):
 
     def forward(self, x, captions, caption_lens):
         caption_features = self.caption_encoder(captions, caption_lens)
+        caption_features = caption_features[1][0]
+        L, B, T = caption_features.size()
+        caption_features = caption_features.transpose(0, 1).reshape(B, -1)
         # out = F.relu(self.bn1(self.conv1(x)))
 
         dense_film_1 = self.dense_film_1(caption_features)
