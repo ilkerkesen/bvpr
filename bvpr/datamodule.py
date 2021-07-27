@@ -8,7 +8,7 @@ from torchvision.transforms.transforms import Grayscale
 
 from bvpr.data.transform import ABColorDiscretizer, PadBottomRight, DownsizeImage
 from bvpr.data.refexp import ReferDataset
-from bvpr.data.colorization import ColorizationDataset
+from bvpr.data.colorization import ColorizationReferenceDataset
 
 
 MAX_IMAGE_SIZE = 640
@@ -174,48 +174,35 @@ def collate_fn(task="segmentation"):
     return collate_fn
 
 
+def color_collate_fn(batch):
+    batch = sorted(batch, key=lambda x: x[2], reverse=True)
+    features = torch.cat([bi[0].unsqueeze(0) for bi in batch], dim=0)
+    captions = torch.cat([bi[1].unsqueeze(0) for bi in batch], dim=0)
+    captions_l = [bi[2] for bi in batch]
+    targets = torch.cat([bi[-1].unsqueeze(0) for bi in batch], dim=0)
+    return features, captions, captions_l, targets
+
+
 class ColorizationDataModule(pl.LightningDataModule):
     def __init__(self, config):
         super().__init__()
         self.config = config
 
-        # image_dim = config["image_size"]
-        image_dim = 224
-        normalizer = ts.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225])
-
-        self.train_rgb_transform = make_rgb_transform(image_dim, ts.RandomCrop)
-        self.val_rgb_transform = make_rgb_transform(image_dim, ts.CenterCrop)
-        self.train_L_transform = make_L_transform(normalizer, image_dim)
-        self.val_L_transform = make_L_transform(normalizer, image_dim)
-        self.train_ab_transform = make_ab_transform(image_dim)
-        self.val_ab_transform = make_ab_transform(image_dim // 4)
-
     def setup(self, stage=None):
         if stage == "fit" or stage is None:
-            self.train_data = ColorizationDataset(
+            self.train_data = ColorizationReferenceDataset(
                 split="train",
-                transform=self.train_rgb_transform,
-                L_transform=self.train_L_transform,
-                ab_transform=self.train_ab_transform,
                 **self.config["dataset"]
             )
 
-            self.val_data = ColorizationDataset(
+            self.val_data = ColorizationReferenceDataset(
                 split="val",
-                transform=self.val_rgb_transform,
-                L_transform=self.val_L_transform,
-                ab_transform=self.val_ab_transform,
                 **self.config["dataset"]
             )
 
         if stage == "test" or stage is None:
-            self.test_data = ColorizationDataset(
+            self.test_data = ColorizationReferenceDataset(
                 split="val",
-                transform=self.val_rgb_transform,
-                L_transform=self.val_L_transform,
-                ab_transform=self.val_ab_transform,
                 **self.config["dataset"]
             )
 
@@ -223,20 +210,21 @@ class ColorizationDataModule(pl.LightningDataModule):
         return DataLoader(
             self.train_data,
             shuffle=True,
-            collate_fn=collate_fn("colorization"),
+            collate_fn=color_collate_fn,
+            # collate_fn=collate_fn("colorization"),
             **self.config["loader"],
         )
 
     def val_dataloader(self):
         return DataLoader(
             self.val_data,
-            collate_fn=collate_fn("colorization"),
+            collate_fn=color_collate_fn,
             **self.config["loader"],
         )
 
     def test_dataloader(self):
         return DataLoader(
             self.test_data,
-            collate_fn=collate_fn("colorization"),
+            collate_fn=color_collate_fn,
             **self.config["loader"],
         )

@@ -166,10 +166,11 @@ class ColorizationExperiment(BaseExperiment):
         self.criterion = nn.CrossEntropyLoss(weight=priors, ignore_index=-1)
 
     def training_step(self, batch, batch_index):
-        L, caption, size, ab = batch
-        scores = self(L, caption, size)
-        scores = F.interpolate(scores, scale_factor=4, mode="bilinear")
-        loss = self.criterion(scores, ab)
+        # L, caption, size, ab = batch
+        features, caption, caption_l, target = batch
+        scores = self(features, caption, caption_l)
+        # scores = F.interpolate(scores, scale_factor=4, mode="bilinear")
+        loss = self.criterion(scores, target)
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
@@ -177,31 +178,34 @@ class ColorizationExperiment(BaseExperiment):
         self.log("trn_loss", loss)
 
     def validation_step(self, batch, batch_index):
-        L, caption, size, ab = batch
-        scores = self(L, caption, size)
-        loss = self.criterion(scores, ab)
-        # top1, top5, num_pixels = compute_pixel_acc(scores[-1], ab)
-        num_pixels = torch.sum(ab >= 0)
-        top1 = torch.sum(scores.argmax(dim=1, keepdim=False) == ab)
+        # L, caption, size, ab = batch
+        features, caption, caption_l, target = batch
+        scores = self(features, caption, caption_l)
+        loss = self.criterion(scores, target)
+        top1, top5, num_pixels = compute_pixel_acc(scores, target)
+        num_pixels = target.numel()
 
         return {
             "loss": loss,
             "N": num_pixels,
             "top1": top1,
+            "top5": top5,
         }
 
     def validation_epoch_end(self, outputs):
         num_pixels = 0
         total_loss = 0.0
-        top1 = 0
+        top1 = top5 = 0
 
         for output in outputs:
             num_pixels += output["N"]
             total_loss += output["loss"] * output["N"]
             top1 += output["top1"]
+            top5 += output["top5"]
 
         self.log("val_loss", total_loss / num_pixels)
         self.log("val_top1_acc", top1 / num_pixels, prog_bar=True)
+        self.log("val_top5_acc", top5 / num_pixels, prog_bar=True)
 
     def test_step(self, batch, batch_index):
         L, caption, size, ab = batch

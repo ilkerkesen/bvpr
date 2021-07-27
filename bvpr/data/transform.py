@@ -49,7 +49,7 @@ class PadBottomRight(object):
 class ABColorDiscretizer(object):
     def __call__(self, image):
         bin_size = 10
-        min_val = -120
+        min_val = -128
         grid_dim = 25
 
         quantized = torch.round(image / bin_size)

@@ -1,6 +1,7 @@
-gpus: 1
-max_epochs: 10
-precision: 16
-gradient_clip_val: 0.0
-val_check_interval: 1.00
-resume_from_checkpoint: null
+trainer:
+  gpus: 1
+  max_epochs: 10
+  precision: 16
+  gradient_clip_val: 0.0
+  val_check_interval: 1.00
+  resume_from_checkpoint: null

@@ -6,8 +6,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.utils.rnn import pack_padded_sequence
 from torchvision.models import resnet18, resnet50, resnet101
 from torchtext.vocab import GloVe
+import clip
 
 from bvpr.util import add_batch_location_embeddings
 from bvpr.util import MOBILENET_SIZE_MAP
@@ -15,6 +17,7 @@ from bvpr.extra import deeplab
 
 
 GLOVE_DIM = 300
+W2V_DIM = 300
 
 
 __all__ = (
@@ -23,6 +26,7 @@ __all__ = (
     "ImageEncoder",
     "MultimodalEncoder",
     "SegmentationHead",
+    "CaptionEncoder",
 )
 
 
@@ -194,6 +198,30 @@ class LSTMEncoder(nn.Module):
         return self.lstm(self.embedding(x))
 
 
+class CaptionEncoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        if config.get("w2v", False):
+            config["embedding_dim"] = W2V_DIM
+            self.embedding = nn.Embedding.from_pretrained(config["vectors"])
+            del config["vectors"]
+        else:
+            self.embedding = nn.Embedding(
+                num_embeddings=config["num_embeddings"],
+                embedding_dim=config["embedding_dim"],
+                padding_idx=0)
+        self.lstm = nn.LSTM(
+            config["embedding_dim"],
+            config["hidden_size"],
+            bidirectional=config.get("bidirectional", False),
+            batch_first=True)
+        self.config = config
+
+    def forward(self, x, x_l):
+        embed = pack_padded_sequence(self.embedding(x), x_l, batch_first=True) 
+        return self.lstm(embed)
+
+
 class MaskPredictor(nn.Module):
     def __init__(
             self, config, in_channels, num_layers, multiscale, num_classes=1):
@@ -334,6 +362,22 @@ class ImageEncoder(nn.Module):
         self.num_channels = min(256 * 2**(num_layers-1), 2048)
         self.num_channels += 8 * self.use_location_embeddings
 
+    def setup_clip_resnet101(self, config):
+        model, _ = clip.load("RN101")
+        num_layers = config["num_layers"]
+        layers = list(model.visual.children())
+        self.model = nn.Sequential(*layers[:8+num_layers])
+
+        self.num_channels = 64
+        if num_layers > 0:
+            self.num_channels = 256 * 2**(num_layers-1)
+
+        self.num_downsample = 2
+        if num_layers > 1:
+            self.num_downsample += num_layers - 1
+
+        self.num_channels += 8 * self.use_location_embeddings
+
     def setup_mobilenetv2(self, config):
         model = torch.hub.load(
             "pytorch/vision:v0.8.2",
@@ -362,15 +406,16 @@ class MultimodalEncoder(nn.Module):
         self.bottom_up = BottomUpEncoder(self.config)
         self.top_down = TopDownEncoder(self.config)
 
-    def forward(self, visual, textual, scale):
-        # split text embedding
-        hidden = textual[1][0].squeeze(0)
+    def forward(self, visual, textual):
+        hidden = textual[1][0]
+        L, B, T = hidden.size()
+        hidden = hidden.transpose(0, 1).reshape(B, -1)
         hidden_size = self.config["text_embedding_dim"] // self.config["num_layers"]
         parted = [
             hidden[:, i*hidden_size:(i+1)*hidden_size]
             for i in range(self.config["num_layers"])
         ]
-        y = self.bottom_up(visual, parted, scale)
+        y = self.bottom_up(visual, parted)
         y = self.top_down(y, parted)
         return y[-1]
 
@@ -450,7 +495,7 @@ class BottomUpEncoder(nn.Module):
 
         self.config = deepcopy(config)
 
-    def forward(self, vis, txt, scale):
+    def forward(self, vis, txt):
         packed = zip(txt, self.layers, self.conditional_layers)
         num_layers = len(self.layers)
         outputs, visual_branch = [vis], [vis]

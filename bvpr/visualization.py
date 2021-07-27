@@ -7,9 +7,11 @@ import torch.nn.functional as F
 import numpy as np
 from scipy.spatial.distance import euclidean
 from torchvision import transforms as ts
+import cv2
 
 from bvpr.models import SegmentationModel, ColorizationModel
 from bvpr.datamodule import SegmentationDataModule, ColorizationDataModule
+from bvpr.data.colorization import cvrgb2lab
 from bvpr.util import sizes2scales, scales2sizes, annealed_mean
 from bvpr.evaluation import compute_pixel_acc
 from skimage import color
@@ -93,6 +95,7 @@ class SegmentationDemo(object):
             ax.imshow(im)
         plt.show()
         print(f"phrase: {phrase}")
+        return (image, gold, predicted)
 
 
 class LanguageFiltersDemo(SegmentationDemo):
@@ -144,7 +147,7 @@ class LanguageFiltersDemo(SegmentationDemo):
                 b_ = b.detach().cpu().numpy()
                 val = euclidean(a_, b_) / np.sqrt(a_.size)
                 heatmap[i, j+len(original)] = val
- 
+
         for i, (layer, txt) in enumerate(zip(top_down_layers, original)):
             top_down_original.append(layer.dense(txt))
 
@@ -156,7 +159,7 @@ class LanguageFiltersDemo(SegmentationDemo):
                 b_ = b.detach().cpu().numpy()
                 val = euclidean(a_, b_) / np.sqrt(a_.size)
                 heatmap[i, j+2*len(original)] = val
-         
+
         if normalize:
             minv, maxv = heatmap.min(), heatmap.max()
             heatmap = (heatmap - minv) / (maxv - minv)
@@ -235,13 +238,12 @@ class MaximumActivatedPatchesDemo(SegmentationDemo):
                              for x in bottom_up_outputs]
         top_down_outputs = [self.get_attention_map(x, size, thresholded=thresholded)
                            for x in top_down_outputs][::-1]
-        # top_down_outputs.append(bottom_up_outputs[-1])
+        top_down_outputs.append(bottom_up_outputs[-1])
 
         scale = 15.
         fig = plt.figure(figsize=(3 * scale, scale))
         grid = ImageGrid(
             fig, 111, nrows_ncols=(1+len(bottom_up_outputs), 3), direction="column", axes_pad=(0.1, 0.3))
-
 
         images = [("image", image)]
         for i, output in enumerate(bottom_up_outputs):
@@ -250,12 +252,18 @@ class MaximumActivatedPatchesDemo(SegmentationDemo):
         for i, output in enumerate(top_down_outputs):
             images.append((f"top-down #{i}", output))
         images.append(("true mask", gold))
+
+        # FIXME: I should not have need something like this,
+        #   but, matplotlib/ImageGrid behaves unresaonable.
+        for i in range(len(bottom_up_outputs)):
+            images.append(("dummy", torch.zeros(bottom_up_outputs[i].shape)))
+
         for ax in grid:
             ax.axis('off')
         for ax, (title, im) in zip(grid, images):
-            ax.axis('off')
-            ax.set_title(title)
-            ax.imshow(im)
+            if im is not None:
+                ax.set_title(title)
+                ax.imshow(im)
         plt.show()
         print(f"phrase: {phrase}")
 
@@ -282,7 +290,7 @@ class WordRemovalActivationDemo(SegmentationDemo):
         img = test_data.transform(image).to(self.device).unsqueeze(0)
         txt = test_data.tokenize_phrase(phrase).to(self.device).unsqueeze(1)
         size = size.unsqueeze(0)
-        
+
         phrases = []
         for idx in range(len(phrase.split())):
             this = phrase.split()
@@ -294,16 +302,17 @@ class WordRemovalActivationDemo(SegmentationDemo):
             if this == "":
                 this = "UNK"
             phrases.append(this)
-        
 
-        bu, td = self.generate_feature_maps(img, phrase, size, datasplit_id)
+        bu, td, pred = self.generate_feature_maps(img, phrase, size, datasplit_id)
         heatmaps = np.empty((2, len(bu), len(phrases)), dtype=object)
+        predicted = [("predicted", pred)]
         for i, phrase_ in enumerate(phrases):
-            bu_, td_ = self.generate_feature_maps(img, phrase_, size, datasplit_id)
+            bu_, td_, pred_ = self.generate_feature_maps(img, phrase_, size, datasplit_id)
             bu_diff = [self.process_differences(o, o_, size) for (o,o_) in zip(bu, bu_)]
             td_diff = [self.process_differences(o, o_, size) for (o,o_) in zip(td, td_)]
             heatmaps[0,:,i] = bu_diff
             heatmaps[1,:,i] = td_diff
+            predicted.append(("predicted", pred_))
 
         scale = 15.
         fig = plt.figure(figsize=(3 * scale, scale))
@@ -312,15 +321,15 @@ class WordRemovalActivationDemo(SegmentationDemo):
 
         images = []
         image_ = ("image", image)
-        predicted = ("predicted", self.predict(img, txt, size))
+        # predicted = ("predicted", self.predict(img, txt, size))
         for i in range(len(phrases)):
             images.append(image_)
             for j in range(len(bu)):
                 images.append(("...", heatmaps[0,j,i]))
-            images.append(predicted)
+            images.append(predicted[i])
             for j in range(len(td)):
                 images.append(("...", heatmaps[1,j,i]))
-                
+
         for ax in grid:
             ax.axis('off')
         for ax, (title, im) in zip(grid, images):
@@ -329,7 +338,7 @@ class WordRemovalActivationDemo(SegmentationDemo):
             ax.imshow(im)
         plt.show()
         print(f"phrase: {phrase}")
-        
+
     def process_differences(self, t1, t2, size):
         diff = torch.mean((t1-t2)**2, dim=1)
         normalized = self.normalize(diff).unsqueeze(0)
@@ -338,10 +347,10 @@ class WordRemovalActivationDemo(SegmentationDemo):
         t = t.view(image_size, image_size)
         h, w = size.flatten().numpy()
         return t[:h, :w]
-        
+
     def normalize(self, arr):
         return (arr - arr.min()) / (arr.max() - arr.min() + 1e-6)
-        
+
     def generate_feature_maps(self, img, phrase, size, datasplit_id):
         test_data = self.data_module.test_datasplits[datasplit_id]
         txt = test_data.tokenize_phrase(phrase).to(self.device).unsqueeze(1)
@@ -359,9 +368,16 @@ class WordRemovalActivationDemo(SegmentationDemo):
         ]
         bu = model.multimodal_encoder.bottom_up(vis, parted, scale)
         td = model.multimodal_encoder.top_down(bu, parted)[::-1]
-        bu = [x.detach().cpu() for x in bu[1:]]
+        image_size = img.size()
+        h, w = size.flatten().numpy()
+        predicted = model.mask_predictor(td[0], image_size=image_size)[-1]
+        predicted = predicted.squeeze()
+        predicted = torch.sigmoid(predicted) >= self.threshold
+        predicted = predicted[:h, :w].float().detach().cpu()
+        bu = [x.detach().cpu() for x in bu]
         td = [x.detach().cpu() for x in td]
-        return bu, td
+        td.append(bu[-1])
+        return bu, td, predicted
 
 
 class ColorizationDemo(object):
@@ -388,6 +404,10 @@ class ColorizationDemo(object):
         # load data
         self.data_module = ColorizationDataModule(data_config)
         self.data_module.setup()
+        self.w2i = self.data_module.train_data.vocab
+        self.i2w = dict()
+        for (w, i) in self.w2i.items():
+            self.i2w[i] = w
 
         # load model
         ckpt = torch.load(self.checkpoint_path)
@@ -395,6 +415,7 @@ class ColorizationDemo(object):
         self.weights = ckpt["state_dict"].get("criterion.weights", None)
         state_dict = {".".join(k.split(".")[1:]): v for (k, v) in state_dict if k.startswith("model")}
         model_config = ckpt["hyper_parameters"]["model"]
+        model_config["text_encoder"]["vectors"] = self.data_module.train_data.embeddings
         self.model = ColorizationModel(model_config).to(device)
         self.model.load_state_dict(state_dict)
         self.model.eval()
@@ -406,58 +427,67 @@ class ColorizationDemo(object):
         ab_ = ab_.unsqueeze(0).float()
         self.ab = ab_[:, :, self.data_module.test_data.ab_mask]
 
-        self.rgb_transform = ts.Compose([
-            ts.ToTensor(),
-            ts.Resize(data_config["image_size"]),
-            ts.CenterCrop(data_config["image_size"]),
-            ts.Lambda(lambda x: x.permute(1, 2, 0)),
-        ])
-
-        self.test_data = self.data_module.test_data
-
-    def get_data(self, example_id, custom_caption=None):
-        item = self.test_data.captions[example_id]
-        caption = item["caption"]
+    def get_data(self, index, custom_caption=None):
+        data = self.data_module.test_data
+        f1, f2, split = data.data_file, data.features_file, data.split
+        image = f1[f"{split}_ims"][index]
+        lab = cvrgb2lab(image)
+        input = lab[:, :, :1]
+        target = lab[::4, ::4, 1:]
+        target = data.lookup_enc.encode_points(target)
+        target = torch.tensor(target).long()
+        features = f2[f"{split}_features"][index]
+        caption = f1[f"{split}_words"][index]
+        caption = torch.tensor(caption.astype("long"))
+        caption_l = f1[f"{split}_length"][index]
         if custom_caption is not None:
-            caption = custom_caption
-        image_file = self.test_data.image_dict[item["image_id"]]["file_name"]
-        rgb = self.test_data.read_rgb_image(image_file)
-        rgb = self.rgb_transform(rgb)
-        lab = color.rgb2lab(rgb.numpy())
-        return lab, rgb, caption
+            unk = self.w2i["unknown"]
+            caption = [self.w2i.get(word, unk) for word in custom_caption.split()]
+            caption = torch.tensor(caption)
+            caption_l = caption.numel()
+        if data.reduce_colors:
+            target = data.color2index[target]
+        return (
+            cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
+            input,
+            torch.tensor(features),
+            caption,
+            caption_l,
+            target,
+        )
 
-    def predict(self, img, txt, size):
-        h, w = size.flatten().numpy()
-        predicted = self.model(img, txt, size)[-1]
-        predicted = predicted[:, :, :h, :w].float().detach().cpu()
-        return predicted
+    def predict(self, features, caption, caption_l):
+        device = self.device
+        features = features.to(device).unsqueeze(0)
+        caption = caption.to(device).unsqueeze(0)
+        scores = self.model(features, caption, [caption_l])
+        scores = scores.float().detach().cpu()
+        return scores
 
     def visualize(self, example_id, custom_caption=None, averaged=True, T=1.0):
-        lab, rgb, caption = self.get_data(example_id, custom_caption)
-        L = self.test_data.L_transform(lab[:, :, 0]).unsqueeze(0).to(self.device)
-        ab = self.test_data.color2index[self.test_data.ab_transform(lab[:, :, 1:])].unsqueeze(0)
-        txt = self.test_data.tokenize_caption(caption).to(self.device).unsqueeze(1)
-        im_h, im_w = lab.shape[:2]
-        size = torch.tensor([im_h, im_w]).unsqueeze(0)
-        predicted = self.predict(L, txt, size)
-        probs = F.softmax(predicted, dim=1)
+        image, input, features, caption, caption_l, target = self.get_data(
+            example_id, custom_caption)
+        scores = self.predict(features, caption, caption_l)
+        upsampled = F.interpolate(scores, scale_factor=4, mode="bilinear")
+        probs = F.softmax(upsampled, dim=1)
         probs = annealed_mean(probs, T=T)
-        probs = probs[:,:, :size[0,0], :size[0,1]]
+        H, W = probs.shape[-2:]
         ab_pred = None
 
         if averaged:
             ab_pred = torch.bmm(self.ab, probs.reshape(1, probs.shape[1], -1))
-            ab_pred = ab_pred.reshape(2, size[0, 0], size[0, 1])
+            ab_pred = ab_pred.reshape(2, probs.shape[-2], probs.shape[-1])
             ab_pred = ab_pred.permute(1, 2, 0)
         else:
             ab_pred = probs.argmax(dim=1)
             ab_pred = self.test_data.index2color[ab_pred]
             a = ab_pred // 25
             b = ab_pred % 25
-            ab_pred = 10 * torch.cat([a, b], dim=0) - 120
+            ab_pred = 10 * torch.cat([a, b], dim=0) - 128
             ab_pred = ab_pred.permute(1,2,0).numpy()
 
-        colorized = np.empty((size[0,0], size[0,1], 3))
+        lab = color.rgb2lab(image)
+        colorized = np.empty((H, W, 3))
         colorized[:, :, 0] = lab[:, :, 0]
         colorized[:, :, 1:] = ab_pred
         colorized_rgb = color.lab2rgb(colorized)
@@ -465,29 +495,19 @@ class ColorizationDemo(object):
         scale = 10.
         fig = plt.figure(figsize=(3 * scale, scale))
         grid = ImageGrid(
-            fig, 111, nrows_ncols=(2,3), axes_pad=0.5)
+            fig, 111, nrows_ncols=(1,3), axes_pad=0.5)
 
-        gold = ab[:, :size[0,0], :size[0,1]]
-        top5_pred = probs.topk(5, dim=1).indices == gold
-        top1, top5, num_pixels = compute_pixel_acc(probs, gold)
+        target = target.unsqueeze(0)
+        top5_pred = scores.topk(5, dim=1).indices == target
+        top1, top5, num_pixels = compute_pixel_acc(scores, target)
         grayscale = np.stack([lab[:, :, 0] / 100.] * 3, axis=-1)
-
-        gold_lab = np.empty((size[0,0], size[0,1], 3))
-        gold_lab[:, :, 0] = lab[:, :, 0]
-
-        ab = self.test_data.index2color[ab]
-        a = ab // 25
-        b = ab % 25
-        ab_gold = 10 * torch.cat([a,b], dim=0) - 120
-        ab_gold = ab_gold.permute(1,2,0).numpy()
-        gold_lab[:, :, 1:] = ab_gold
 
         images = [
             ("image", grayscale),
-            ("ground truth", color.lab2rgb(gold_lab)),
+            ("ground truth", image),
             ("colorized", colorized_rgb),
-            ("top-1", top5_pred[0,0,:,:].float()),
-            ("top-5", top5_pred.sum(dim=1)[0].float()),
+            # ("top-1", top5_pred[0, 0, :, :].float()),
+            # ("top-5", top5_pred.sum(dim=1)[0].float()),
         ]
 
         for ax, (title, im) in zip(grid, images):
@@ -495,5 +515,8 @@ class ColorizationDemo(object):
             ax.set_title(title)
             ax.imshow(im)
         plt.show()
+
+        caption = caption.detach().cpu().tolist()[:caption_l]
+        caption = " ".join([self.i2w[word_index] for word_index in caption])
         print(f"caption: {caption}")
         print(f"top-1: {top1 / num_pixels}, top-5: {top5 / num_pixels}")

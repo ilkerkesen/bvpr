@@ -3,11 +3,12 @@ architecture: ColorizationModel
 multiscale: false
 use_location_embeddings: true
 text_encoder:
-  name: LSTMEncoder
+  name: CaptionEncoder
   hidden_size: 256
   bidirectional: false
   embedding_dim: 300
   glove: true
+  w2v: true
   dropout: 0.2
 image_encoder:
   name: resnet101

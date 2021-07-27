@@ -33,7 +33,7 @@ __all__ = (
 )
 
 
-def process_config(cfg, dataset):
+def process_config(cfg, dataset, task="segmentation"):
     cfg = deepcopy(cfg)
     encoder = cfg["image_encoder"]["name"]
     encoder_num_layers = cfg["image_encoder"]["num_layers"]
@@ -47,12 +47,16 @@ def process_config(cfg, dataset):
         predictor_num_layers = encoder_num_layers + 1
     elif encoder == "mobilenetv2":
         predictor_num_layers = MOBILENET_SIZE_MAP[encoder_num_layers-1][1]
-    if cfg["architecture"] != "ColorizationBaseline":
+
+    if task == "segmentation":
         cfg["text_encoder"]["corpus"] = dataset.corpus
         cfg["mask_predictor"]["num_layers"] = predictor_num_layers
-    else:
-        cfg["network"]["vocab_size"] = len(dataset.corpus)
-        cfg["network"]["corpus"] = dataset.corpus
+    elif cfg["architecture"] == "ColorizationModel":
+        cfg["mask_predictor"]["num_layers"] = predictor_num_layers
+        cfg["text_encoder"]["vectors"] = dataset.embeddings
+    elif cfg["architecture"] == "ColorizationBaseline":
+        cfg["vectors"] = dataset.embeddings
+
     return cfg
 
 
@@ -68,7 +72,8 @@ def make_mask(real, downsized):
 
 def create_callbacks(config, log_dir):
     checkpoints_path = osp.join(log_dir, "checkpoints")
-    config["checkpoint"]["dirpath"] = osp.join(checkpoints_path, "{epoch:03d}")
+    # config["checkpoint"]["dirpath"] = osp.join(checkpoints_path, "{epoch:03d}")
+    config["checkpoint"]["dirpath"] = checkpoints_path
     checkpoint_callback = pl.callbacks.ModelCheckpoint(**config["checkpoint"])
     last_ckpt = osp.join(checkpoints_path, "last.ckpt")
     last_ckpt = last_ckpt if osp.isfile(last_ckpt) else None

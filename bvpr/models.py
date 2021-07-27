@@ -98,21 +98,38 @@ class SegmentationModel(nn.Module):
             scale = sizes2scales(size, image_size)
 
         txt = self.text_encoder(phrase)
-        joint = self.multimodal_encoder(vis, txt, scale)
+        joint = self.multimodal_encoder(vis, txt)
         outputs = self.mask_predictor(joint, image_size=image_size)
         return outputs
 
 
-class ColorizationModel(SegmentationModel):
-    NUM_CLASSES = 625  # FIXME: fix hardcode
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+class ColorizationModel(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.text_encoder = self.setup_submodule(config, "text_encoder")
+        # num_channels = self.image_encoder.num_channels
+        num_channels = 512
+        hidden_size = self.text_encoder.config["hidden_size"]
+        self.multimodal_encoder = MultimodalEncoder(
+            config["multimodal_encoder"],
+            in_channels=num_channels,
+            text_embedding_dim=hidden_size)
         self.mask_predictor = SegmentationHead(
             self.config["multimodal_encoder"]["num_kernels"],
             self.config["mask_predictor"]["num_classes"],
-            upsampling=2,
-        )
+            upsampling=2)
+
+    def setup_submodule(self, model_config, submodule, **kwargs):
+        config = model_config[submodule]
+        submodule_class = eval(config["name"], **kwargs)
+        return submodule_class(config)
+
+    def forward(self, features, caption, caption_l):
+        txt = self.text_encoder(caption, caption_l)
+        joint = self.multimodal_encoder(features, txt)
+        outputs = self.mask_predictor(joint)
+        return outputs
 
 
 class ColorizationBaseline(nn.Module):
@@ -123,14 +140,9 @@ class ColorizationBaseline(nn.Module):
             config["image_encoder"],
             config["use_location_embeddings"],
         )
-        self.network = AutocolorizeResnet(**config["network"])
+        self.network = AutocolorizeResnet(vectors=config["vectors"], **config["network"])
+        del config["vectors"]
 
-    def forward(self, image, caption, size=None):
-        caption = caption.T
-        B, T = caption.shape
-        lens = torch.ones(B, dtype=torch.long) * T
-        image_size = image.size()
-        B, C, H, W = image_size
-        scale = sizes2scales(size, image_size)
-        features = self.image_encoder(image, scales2sizes(scale, image_size))
-        return self.network(features, caption, lens)
+    def forward(self, features, caption, caption_l):
+        output = self.network(features, caption, caption_l)
+        return output[-1]
