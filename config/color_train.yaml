@@ -14,7 +14,7 @@ criterion: "MaskedMultiScaleBCELoss"
 
 # data loader
 loader:
-  batch_size: 16
+  batch_size: 24
   pin_memory: false
   num_workers: 5
 

@@ -72,7 +72,8 @@ def make_mask(real, downsized):
 
 def create_callbacks(config, log_dir):
     checkpoints_path = osp.join(log_dir, "checkpoints")
-    config["checkpoint"]["dirpath"] = osp.join(checkpoints_path, "{epoch:03d}")
+    # config["checkpoint"]["dirpath"] = osp.join(checkpoints_path, "{epoch:03d}")
+    config["checkpoint"]["dirpath"] = checkpoints_path
     checkpoint_callback = pl.callbacks.ModelCheckpoint(**config["checkpoint"])
     last_ckpt = osp.join(checkpoints_path, "last.ckpt")
     last_ckpt = last_ckpt if osp.isfile(last_ckpt) else None
