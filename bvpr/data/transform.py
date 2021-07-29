@@ -47,12 +47,15 @@ class PadBottomRight(object):
 
 
 class ABColorDiscretizer(object):
+    def __init__(self, min_val=-128):
+        super().__init__()
+        self.min_val = min_val
+
     def __call__(self, image):
         bin_size = 10
-        min_val = -128
+        min_val = self.min_val
         grid_dim = 25
 
-        quantized = torch.round(image / bin_size)
-        quantized = quantized - (min_val / bin_size)
+        quantized = torch.round((image - min_val) / bin_size)
         discrete = quantized[0, :, :] * grid_dim + quantized[1, :, :]
         return discrete.long()

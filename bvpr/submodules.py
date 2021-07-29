@@ -191,11 +191,19 @@ class LSTMEncoder(nn.Module):
                 num_embeddings=config["num_embeddings"],
                 embedding_dim=config["embedding_dim"],
                 padding_idx=0)
-        self.lstm = nn.LSTM(config["embedding_dim"], config["hidden_size"])
+        self.lstm = nn.LSTM(
+            config["embedding_dim"],
+            config["hidden_size"],
+            batch_first=config.get("batch_first", False),
+        )
         self.config = config
 
-    def forward(self, x):
-        return self.lstm(self.embedding(x))
+    def forward(self, x, x_l=None):
+        embed = self.embedding(x)
+        if x_l is not None:
+            batch_first = self.config.get("batch_first", False)
+            embed = pack_padded_sequence(embed, x_l, batch_first=batch_first)
+        return self.lstm(embed)
 
 
 class CaptionEncoder(nn.Module):

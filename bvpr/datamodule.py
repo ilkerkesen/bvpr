@@ -4,11 +4,11 @@ from torch.utils.data import DataLoader
 from torchvision import transforms as ts
 import pytorch_lightning as pl
 from skimage import color
-from torchvision.transforms.transforms import Grayscale
+from torchvision.transforms.transforms import Grayscale, Lambda
 
 from bvpr.data.transform import ABColorDiscretizer, PadBottomRight, DownsizeImage
 from bvpr.data.refexp import ReferDataset
-from bvpr.data.colorization import ColorizationReferenceDataset
+from bvpr.data.colorization import ColorsDataset, FlowersDataset
 
 
 MAX_IMAGE_SIZE = 640
@@ -22,21 +22,34 @@ def make_input_transform(normalizer, image_dim):
         PadBottomRight(image_dim),
     ])
 
+
 def make_L_transform(normalizer, image_dim):
     return ts.Compose([
-        ts.Grayscale(num_output_channels=3),
+        ts.Lambda(lambda x: x.permute(1, 2, 0)),
+        ts.Lambda(lambda x: color.rgb2lab(x)),
+        ts.Lambda(lambda x: np.stack([x[:, :, 0]] * 3, -1)),
+        ts.ToTensor(),
         normalizer,
     ])
 
 
-def make_ab_transform(image_dim):
+def make_raw_L_transform(image_dim):
+    return ts.Compose([
+        ts.Resize(image_dim),
+        ts.Lambda(lambda x: x.permute(1, 2, 0)),
+        ts.Lambda(lambda x: color.rgb2lab(x)[:, :, :1]),
+        ts.ToTensor(),
+    ])
+
+
+def make_ab_transform(image_dim, ab_minval=-128):
     return ts.Compose([
         ts.Resize(image_dim),
         ts.Lambda(lambda x: x.permute(1, 2, 0)),
         ts.Lambda(lambda x: color.rgb2lab(x)),
         ts.Lambda(lambda x: x[:, :, 1:]),
         ts.ToTensor(),
-        ABColorDiscretizer(),
+        ABColorDiscretizer(ab_minval),
     ])
 
 
@@ -175,12 +188,29 @@ def collate_fn(task="segmentation"):
 
 
 def color_collate_fn(batch):
-    batch = sorted(batch, key=lambda x: x[2], reverse=True)
-    features = torch.cat([bi[0].unsqueeze(0) for bi in batch], dim=0)
-    captions = torch.cat([bi[1].unsqueeze(0) for bi in batch], dim=0)
-    captions_l = [bi[2] for bi in batch]
-    targets = torch.cat([bi[-1].unsqueeze(0) for bi in batch], dim=0)
-    return features, captions, captions_l, targets
+    batch = sorted(batch, key=lambda x: x["caption_len"], reverse=True)
+    visual = torch.cat([bi["input_image"].unsqueeze(0) for bi in batch], dim=0)
+    B, L = len(batch), batch[0]["caption_len"]
+    captions = torch.zeros(B, L, dtype=torch.long)
+    for i, bi in enumerate(batch):
+        captions[i, :bi["caption_len"]] = bi["caption"]
+    captions_l = [bi["caption_len"] for bi in batch]
+    targets = torch.cat([bi["target"].unsqueeze(0) for bi in batch], dim=0)
+
+    # for validation / testing
+    Ls = rgbs = None
+    if batch[0]["rgb"] is not None:
+        Ls = torch.cat([bi["L"].unsqueeze(0) for bi in batch], dim=0) 
+        rgbs = torch.cat([bi["rgb"].unsqueeze(0) for bi in batch], dim=0) 
+
+    return {
+        "images": visual,
+        "captions": captions,
+        "captions_l": captions_l,
+        "targets": targets,
+        "Ls": Ls,
+        "rgbs": rgbs,
+    }
 
 
 class ColorizationDataModule(pl.LightningDataModule):
@@ -188,21 +218,53 @@ class ColorizationDataModule(pl.LightningDataModule):
         super().__init__()
         self.config = config
 
+        normalizer = ts.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225],
+        )
+
+        image_dim = 224
+        self.L_transform = make_L_transform(normalizer, image_dim)
+        self.raw_L_transform = make_raw_L_transform(image_dim // 4)
+        self.ab_transform = make_ab_transform(image_dim // 4, -120)
+        self.train_transform = make_rgb_transform(image_dim, ts.RandomCrop)
+        self.val_transform = make_rgb_transform(image_dim, ts.CenterCrop)
+        self.rgb_transform = ts.Resize(image_dim // 4)
+
+        self.dataset_class = ColorsDataset
+        self.val_split = self.test_split = "val"
+        if config["dataset"]["dataset"] == "flowers":
+            self.dataset_class = FlowersDataset
+            self.val_split = self.test_split = "test"
+
     def setup(self, stage=None):
         if stage == "fit" or stage is None:
-            self.train_data = ColorizationReferenceDataset(
+            self.train_data = self.dataset_class(
                 split="train",
+                transform=self.train_transform,
+                L_transform=self.L_transform,
+                ab_transform=self.ab_transform,
                 **self.config["dataset"]
             )
 
-            self.val_data = ColorizationReferenceDataset(
-                split="val",
+            self.val_data = self.dataset_class(
+                split=self.val_split,
+                transform=self.val_transform,
+                L_transform=self.L_transform,
+                ab_transform=self.ab_transform,
+                raw_L_transform=self.raw_L_transform,
+                rgb_transform=self.rgb_transform,
                 **self.config["dataset"]
             )
 
         if stage == "test" or stage is None:
-            self.test_data = ColorizationReferenceDataset(
-                split="val",
+            self.test_data = self.dataset_class(
+                split=self.test_split,
+                transform=self.val_transform,
+                L_transform=self.L_transform,
+                ab_transform=self.ab_transform,
+                raw_L_transform=self.raw_L_transform,
+                rgb_transform=self.rgb_transform,
                 **self.config["dataset"]
             )
 
@@ -211,7 +273,6 @@ class ColorizationDataModule(pl.LightningDataModule):
             self.train_data,
             shuffle=True,
             collate_fn=color_collate_fn,
-            # collate_fn=collate_fn("colorization"),
             **self.config["loader"],
         )
 

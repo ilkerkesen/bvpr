@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Variable
 from pytorch_lightning import LightningModule
+from skimage import color
 
 from bvpr.models import *
 from bvpr.criterion import *
@@ -164,13 +165,20 @@ class ColorizationExperiment(BaseExperiment):
         if priors is not None:
             priors = Variable(priors)
         self.criterion = nn.CrossEntropyLoss(weight=priors, ignore_index=-1)
+        self.setup_ab_map()
+
+    def setup_ab_map(self, ab_mask=None):
+        a = torch.unsqueeze(torch.arange(625) // 25, 0)
+        b = torch.unsqueeze(torch.arange(625) % 25, 0)
+        self.ab = 10 * torch.cat([a, b], dim=0) - 120
+        self.ab = self.ab.unsqueeze(0).float()
+        if ab_mask is not None:
+            self.ab = self.ab[:, :, ab_mask]
+        self.ab = self.ab.to("cuda:0")  # FIXME
 
     def training_step(self, batch, batch_index):
-        # L, caption, size, ab = batch
-        features, caption, caption_l, target = batch
-        scores = self(features, caption, caption_l)
-        # scores = F.interpolate(scores, scale_factor=4, mode="bilinear")
-        loss = self.criterion(scores, target)
+        scores = self(batch["images"], batch["captions"], batch["captions_l"])
+        loss = self.criterion(scores, batch["targets"])
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
@@ -179,33 +187,50 @@ class ColorizationExperiment(BaseExperiment):
 
     def validation_step(self, batch, batch_index):
         # L, caption, size, ab = batch
-        features, caption, caption_l, target = batch
-        scores = self(features, caption, caption_l)
-        loss = self.criterion(scores, target)
-        top1, top5, num_pixels = compute_pixel_acc(scores, target)
-        num_pixels = target.numel()
+        targets = batch["targets"]
+        scores = self(batch["images"], batch["captions"], batch["captions_l"])
+        loss = self.criterion(scores, targets)
+        top1, top5, num_pixels = compute_pixel_acc(scores, targets)
+        num_pixels = targets.numel()
+
+        rgbs = torch.round(255 * batch["rgbs"])
+        probs = F.softmax(scores, dim=1)
+        B, C, H, W = probs.size()
+        probs = probs.transpose(0, 1).unsqueeze(0)
+        probs = probs.reshape(1, C, -1)
+        ab_pred = torch.bmm(self.ab, probs)
+        ab_pred = ab_pred.reshape(2, B, H, W)
+        ab_pred = ab_pred.transpose(0, 1)
+        predicted = torch.cat([batch["Ls"], ab_pred], dim=1)
+        predicted = predicted.permute(0, 2, 3, 1).cpu().numpy()
+        predicted = torch.tensor(color.lab2rgb(predicted), device=rgbs.device)
+        predicted = torch.round(predicted.permute(0, -1, 1, 2) * 255)
 
         return {
             "loss": loss,
             "N": num_pixels,
             "top1": top1,
             "top5": top5,
+            "psnr": psnr(predicted, rgbs),
         }
 
     def validation_epoch_end(self, outputs):
-        num_pixels = 0
-        total_loss = 0.0
+        num_pixels = num_batches = 0
+        total_loss = psnr_val = 0.0
         top1 = top5 = 0
 
         for output in outputs:
             num_pixels += output["N"]
+            num_batches += 1
             total_loss += output["loss"] * output["N"]
             top1 += output["top1"]
             top5 += output["top5"]
+            psnr_val += output.get("psnr", 0.0)
 
         self.log("val_loss", total_loss / num_pixels)
         self.log("val_top1_acc", top1 / num_pixels, prog_bar=True)
         self.log("val_top5_acc", top5 / num_pixels, prog_bar=True)
+        self.log("val_psnr", psnr_val / num_batches, prog_bar=True)
 
     def test_step(self, batch, batch_index):
         L, caption, size, ab = batch

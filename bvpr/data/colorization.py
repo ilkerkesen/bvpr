@@ -149,7 +149,8 @@ class ColorizationDataset(Dataset):
 
 class ColorizationReferenceDataset(Dataset):
     def __init__(self, data_root, split="train", max_query_len=20,
-                 transform=None, reduce_colors=False, **kwargs):
+                 transform=None, L_transform=None, ab_transform=None,
+                 reduce_colors=False, **kwargs):
         self.data_root = osp.abspath(osp.expanduser(data_root))
         self.split = split
         self.reduce_colors = reduce_colors
@@ -198,6 +199,139 @@ class ColorizationReferenceDataset(Dataset):
             caption_len,
             target,
         )
+
+
+class BaseColorsDataset(Dataset):
+    def __init__(self, data_root, split="train", max_query_len=20,
+                 transform=None, L_transform=None, ab_transform=None,
+                 raw_L_transform=None, rgb_transform=None, tokenize=True,
+                 reduce_colors=False, min_occur=5, **kwargs):
+        super().__init__()
+        self.data_root = osp.abspath(osp.expanduser(data_root))
+        self.split = split
+        self.tokenize = tokenize
+        self.reduce_colors = reduce_colors
+        self.json_file = osp.join(data_root, "dataset.json")
+        self.image_dir = osp.join(data_root, "jpg")
+        self.tokenizer = get_tokenizer("basic_english")
+        self.transform = transform
+        self.L_transform = L_transform
+        self.ab_transform = ab_transform
+        self.raw_L_transform = raw_L_transform
+        self.rgb_transform = rgb_transform
+        self.load_data()
+        priors_path = osp.join(self.data_root, "priors-56x56.npy")
+        self.raw_priors = torch.from_numpy(
+            prior_boosting(priors_path, 1.0, 0.5)).float()
+        self.num_colors = self.raw_priors.numel()
+        self.ab_mask = self.raw_priors > 0
+        self.color2index = -torch.ones(self.num_colors).long()
+        self.color2index[self.ab_mask] = torch.arange(self.ab_mask.sum())
+        self.index2color = torch.arange(self.num_colors)[self.ab_mask]
+        self.priors = self.raw_priors[self.raw_priors > 0]
+        self.corpus = self.load_corpus(min_occur=min_occur)
+
+    def load_data(self):
+        with open(self.json_file, "r") as f:
+            self.json_data = json.load(f)
+        self.captions = [x for x in self.json_data if x["split"] == self.split]
+
+    def load_corpus(self, min_occur):
+        corpus_file = osp.join(self.data_root, f"corpus-{min_occur}.pth")
+        if osp.isfile(corpus_file):
+            return torch.load(corpus_file)
+
+        train_sentences = [
+            x["caption"]
+            for x in self.json_data
+            if x["split"] == "train"
+        ]
+
+        count_dict = dict()        
+        for sentence in train_sentences:
+            tokens = self.tokenizer(sentence.lower())
+            for token in tokens:
+                count_dict[token] = 1 + count_dict.get(token, 0)
+
+        corpus = Corpus()
+        corpus.dictionary.add_word(PAD_TOKEN)
+        corpus.dictionary.add_word(UNK_TOKEN)
+        corpus.dictionary.add_word(SOS_TOKEN)
+
+        words = sorted([
+            (word, count)
+            for (word, count) in count_dict.items()
+            if count >= min_occur
+        ], key=lambda x: x[1])
+        words = [word for (word, _) in words]
+        for word in words:
+            corpus.dictionary.add_word(word)
+
+        torch.save(corpus, corpus_file)
+        return corpus
+
+    def read_rgb_image(self, image_filename):
+        image_path = osp.join(self.image_dir, image_filename)
+        image = io.imread(image_path)
+        if len(image.shape) == 2:
+            image = np.stack([image] * 3, axis=-1)
+        return image
+
+    def tokenize_caption(self, caption):
+        tokens = [SOS_TOKEN] + self.tokenizer(caption)
+        w2i = self.corpus.dictionary.word2idx
+        tokens = [w2i.get(t, w2i[UNK_TOKEN]) for t in tokens]
+        return torch.tensor(tokens)
+
+    def __len__(self):
+        return len(self.captions)
+
+    def __getitem__(self, index):
+        item = self.captions[index]
+        caption = item["caption"]
+        if self.tokenize:
+            caption = self.tokenize_caption(caption)
+
+        image_filename = item["image_file"]
+        image = self.read_rgb_image(image_filename)
+        if self.transform is not None:
+            image = self.transform(image)
+
+        L = ab = image
+        if self.L_transform is not None:
+            L = self.L_transform(image)
+
+        if self.ab_transform is not None:
+            ab = self.ab_transform(image)
+            if self.reduce_colors:
+                ab = self.color2index[ab]
+
+        raw_L = None
+        if self.raw_L_transform is not None: 
+            raw_L = self.raw_L_transform(image)
+        
+        rgb = None
+        if self.rgb_transform is not None:
+            rgb = self.rgb_transform(image)
+
+        return {
+            "input_image": L,
+            "caption": caption,
+            "caption_len": len(caption),
+            "target": ab,
+            "L": raw_L,
+            "rgb": rgb,
+        }
+
+
+class FlowersDataset(BaseColorsDataset):
+    pass
+
+
+class ColorsDataset(BaseColorsDataset):
+    def load_corpus(self, min_occur):
+        corpus_file = osp.join(self.data_root, "corpus-0.pth")
+        return torch.load(corpus_file)
 
 
 class LookupEncode(object):

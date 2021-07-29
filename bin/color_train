@@ -13,7 +13,8 @@ import hydra
 from omegaconf import OmegaConf
 
 from bvpr.util import process_config, create_callbacks
-from bvpr.data.colorization import ColorizationReferenceDataset as Dataset
+from bvpr.data.colorization import ColorsDataset
+from bvpr.data.colorization import FlowersDataset
 from bvpr.experiment import ColorizationExperiment as Experiment
 from bvpr.datamodule import ColorizationDataModule as DataModule
 
@@ -27,6 +28,12 @@ def main(config):
     config = pl.utilities.parsing.AttributeDict(config)
     pl.seed_everything(config["seed"])
     print(config)
+
+    dataset_name = config["dataset"]["dataset"]
+    if dataset_name == "colors":
+        Dataset = ColorsDataset
+    elif dataset_name == "flowers":
+        Dataset = FlowersDataset
 
     # data
     train_data = Dataset(split="train", **config["dataset"])
@@ -55,6 +62,7 @@ def main(config):
     experiment = Experiment(config)
     datamodule = DataModule(config)
     datamodule.setup(stage="fit")
+    experiment.setup_ab_map(ab_mask=train_data.ab_mask)
     trainer = pl.Trainer(
         logger=logger,
         callbacks=callbacks,

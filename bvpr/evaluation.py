@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchmetrics.functional import mean_squared_error
 
 from bvpr.util import make_mask
 
@@ -10,6 +11,7 @@ __all__ = (
     "compute_iou",
     "compute_thresholded",
     "compute_pixel_acc",
+    "psnr",
 )
 
 
@@ -44,3 +46,8 @@ def compute_pixel_acc(scores, gold):
     top1 = topk_pred[:, 0, :, :].sum().item()
     top5 = topk_pred.sum().item()
     return top1, top5, num_pixels
+
+
+def psnr(predicted, target, data_range=255., eps=1e-7):
+    mse = mean_squared_error(predicted, target)
+    return 10 * torch.log10(data_range**2 / (mse + eps))

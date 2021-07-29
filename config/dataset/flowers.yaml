@@ -1,0 +1,5 @@
+# @package _group_
+dataset: "flowers"
+data_root: "/userfiles/ikesen16/data/oxford-flowers-102"
+min_occur: 5
+reduce_colors: true

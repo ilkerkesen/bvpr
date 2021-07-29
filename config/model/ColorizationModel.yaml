@@ -1,15 +1,16 @@
 # @package _group_
 architecture: ColorizationModel
 multiscale: false
-use_location_embeddings: true
+use_location_embeddings: false
 text_encoder:
-  name: CaptionEncoder
+  name: LSTMEncoder
   hidden_size: 256
   bidirectional: false
   embedding_dim: 300
   glove: true
   w2v: true
   dropout: 0.2
+  batch_first: true
 image_encoder:
   name: resnet101
   num_layers: 2
