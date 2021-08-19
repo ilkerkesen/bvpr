@@ -18,15 +18,16 @@ from bvpr.experiment import ColorizationExperiment as Experiment
 from bvpr.datamodule import ColorizationDataModule as DataModule
 from bvpr.data.transform import LAB2RGB
 
-
 CONFIG_DIR = osp.abspath(osp.join(__file__, "../..", "config"))
 
 
-@hydra.main(config_path=CONFIG_DIR, config_name="color_train")
+@hydra.main(config_path=CONFIG_DIR, config_name="color_generate")
 def main(config):
     config = OmegaConf.to_container(config)
     config = pl.utilities.parsing.AttributeDict(config)
     pl.seed_everything(config["seed"])
+    assert config["checkpoint"] is not None
+    assert config["output"] is not None
     print(config)
 
     dataset_name = config["dataset"]["dataset"]
@@ -39,41 +40,35 @@ def main(config):
 
     # data
     train_data = Dataset(split="train", **config["dataset"])
-    config["model"] = process_config(config["model"], train_data, task="colorization")
     if train_data.reduce_colors:
         config["priors"] = train_data.priors
     else:
         config["priors"] = train_data.raw_priors
 
-    num_colors = config["priors"].numel()
-    if config["model"].get("mask_predictor", None) is not None:
-        config["model"]["mask_predictor"]["num_classes"] = num_colors
-    else:
-        config["model"]["network"]["num_classes"] = num_colors 
+    config["checkpoint"] = osp.abspath(osp.expanduser(config["checkpoint"]))
+    # config["trainer"]["resume_from_checkpoint"] = config["checkpoint"]
+    config["trainer"]["max_epochs"] = 5000  # FIXME
+    ckpt = torch.load(config["checkpoint"])
+    config["model"] = ckpt["hyper_parameters"]["model"]
+    config["model"] = process_config(config["model"], train_data)
 
-    # logger
-    config["logger"]["save_dir"] = osp.abspath(
-        osp.expanduser(config["logger"]["save_dir"]))
-    if config["logger"]["name"] is None:
-        architecture = config["model"]["architecture"]
-        dataset = config["dataset"]["dataset"]
-        config["logger"]["name"] = f"{architecture}-{dataset}"
-    logger = pl.loggers.TensorBoardLogger(**config["logger"])
-
-    # checkpoint
-    callbacks, ckpt_path = create_callbacks(config, logger.log_dir)
-    config["trainer"]["resume_from_checkpoint"] = ckpt_path
-    experiment = Experiment(config)
-    datamodule = DataModule(config)
-    datamodule.setup(stage="fit")
+    experiment, datamodule = Experiment(config), DataModule(config)
+    state_dict = torch.load(config["checkpoint"])["state_dict"]
+    state_dict = {
+        ".".join(k.split(".")[1:]): v
+        for (k, v) in state_dict.items()
+        if k.startswith("model.")
+    }
+    experiment.model.load_state_dict(state_dict)  # FIXME
+    datamodule.setup()
     experiment.lab2rgb = LAB2RGB(ab_mask=train_data.ab_mask)
     trainer = pl.Trainer(
-        logger=logger,
-        callbacks=callbacks,
-        **config["trainer"]) 
-    trainer.fit(experiment, datamodule=datamodule)
+        logger=None,
+        callbacks=None,
+        **config["trainer"],
+    )
+    trainer.test(experiment, datamodule=datamodule)
 
-
-
+    
 if __name__ == "__main__":
     main()

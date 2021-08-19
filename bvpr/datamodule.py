@@ -8,7 +8,7 @@ from torchvision.transforms.transforms import Grayscale, Lambda
 
 from bvpr.data.transform import ABColorDiscretizer, PadBottomRight, DownsizeImage
 from bvpr.data.refexp import ReferDataset
-from bvpr.data.colorization import ColorsDataset, FlowersDataset
+from bvpr.data.colorization import ColorsDataset, FlowersDataset, COCODataset
 
 
 MAX_IMAGE_SIZE = 640
@@ -25,6 +25,7 @@ def make_input_transform(normalizer, image_dim):
 
 def make_L_transform(normalizer, image_dim):
     return ts.Compose([
+        # ts.Grayscale(num_output_channels=3),
         ts.Lambda(lambda x: x.permute(1, 2, 0)),
         ts.Lambda(lambda x: color.rgb2lab(x)),
         ts.Lambda(lambda x: np.stack([x[:, :, 0]] * 3, -1)),
@@ -42,14 +43,15 @@ def make_raw_L_transform(image_dim):
     ])
 
 
-def make_ab_transform(image_dim, ab_minval=-128):
+def make_ab_transform(image_dim, ab_minval=-120):
+    discretizer = ABColorDiscretizer(ab_minval)
     return ts.Compose([
         ts.Resize(image_dim),
         ts.Lambda(lambda x: x.permute(1, 2, 0)),
         ts.Lambda(lambda x: color.rgb2lab(x)),
         ts.Lambda(lambda x: x[:, :, 1:]),
         ts.ToTensor(),
-        ABColorDiscretizer(ab_minval),
+        discretizer,
     ])
 
 
@@ -200,8 +202,9 @@ def color_collate_fn(batch):
     # for validation / testing
     Ls = rgbs = None
     if batch[0]["rgb"] is not None:
-        Ls = torch.cat([bi["L"].unsqueeze(0) for bi in batch], dim=0) 
-        rgbs = torch.cat([bi["rgb"].unsqueeze(0) for bi in batch], dim=0) 
+        Ls = torch.cat([bi["L"].unsqueeze(0) for bi in batch], dim=0)
+        rgbs = torch.cat([bi["rgb"].unsqueeze(0) for bi in batch], dim=0)
+    indexes = [bi["index"] for bi in batch]
 
     return {
         "images": visual,
@@ -210,6 +213,7 @@ def color_collate_fn(batch):
         "targets": targets,
         "Ls": Ls,
         "rgbs": rgbs,
+        "indexes": indexes,
     }
 
 
@@ -230,12 +234,16 @@ class ColorizationDataModule(pl.LightningDataModule):
         self.train_transform = make_rgb_transform(image_dim, ts.RandomCrop)
         self.val_transform = make_rgb_transform(image_dim, ts.CenterCrop)
         self.rgb_transform = ts.Resize(image_dim // 4)
+        self.demo_raw_L_transform = make_raw_L_transform(image_dim)
+        self.demo_rgb_transform = ts.Resize(image_dim)
 
         self.dataset_class = ColorsDataset
         self.val_split = self.test_split = "val"
         if config["dataset"]["dataset"] == "flowers":
             self.dataset_class = FlowersDataset
             self.val_split = self.test_split = "test"
+        elif config["dataset"]["dataset"] == "coco":
+            self.dataset_class = COCODataset
 
     def setup(self, stage=None):
         if stage == "fit" or stage is None:
@@ -244,6 +252,8 @@ class ColorizationDataModule(pl.LightningDataModule):
                 transform=self.train_transform,
                 L_transform=self.L_transform,
                 ab_transform=self.ab_transform,
+                raw_L_transform=self.raw_L_transform,
+                rgb_transform=self.rgb_transform,
                 **self.config["dataset"]
             )
 
@@ -268,6 +278,17 @@ class ColorizationDataModule(pl.LightningDataModule):
                 **self.config["dataset"]
             )
 
+        if stage == "demo" or stage is None:
+            self.demo_data = self.dataset_class(
+                split=self.test_split,
+                transform=self.val_transform,
+                L_transform=self.L_transform,
+                ab_transform=self.ab_transform,
+                raw_L_transform=self.demo_raw_L_transform,
+                rgb_transform=self.demo_rgb_transform,
+                **self.config["dataset"]
+            )
+
     def train_dataloader(self):
         return DataLoader(
             self.train_data,
@@ -279,6 +300,7 @@ class ColorizationDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         return DataLoader(
             self.val_data,
+            shuffle=False,
             collate_fn=color_collate_fn,
             **self.config["loader"],
         )
@@ -286,6 +308,7 @@ class ColorizationDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(
             self.test_data,
+            shuffle=False,
             collate_fn=color_collate_fn,
             **self.config["loader"],
         )

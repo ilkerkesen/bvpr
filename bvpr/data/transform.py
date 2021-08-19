@@ -1,9 +1,11 @@
+from bvpr.util import annealed_mean
 from collections import Iterable
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
+from skimage import color
 
 
 class DownsizeImage(object):
@@ -47,7 +49,7 @@ class PadBottomRight(object):
 
 
 class ABColorDiscretizer(object):
-    def __init__(self, min_val=-128):
+    def __init__(self, min_val=-120):
         super().__init__()
         self.min_val = min_val
 
@@ -59,3 +61,37 @@ class ABColorDiscretizer(object):
         quantized = torch.round((image - min_val) / bin_size)
         discrete = quantized[0, :, :] * grid_dim + quantized[1, :, :]
         return discrete.long()
+
+
+class LAB2RGB(object):
+    def __init__(self, ab_mask=None, device="cuda:0", mode="eval"):
+        a = torch.unsqueeze(torch.arange(625) // 25, 0)
+        b = torch.unsqueeze(torch.arange(625) % 25, 0)
+        self.ab = 10 * torch.cat([a, b], dim=0) - 120
+        self.ab = self.ab.unsqueeze(0).float()
+        if ab_mask is not None:
+            self.ab = self.ab[:, :, ab_mask]
+        self.device = torch.device(device)
+        self.ab = self.ab.to(self.device)
+        self.mode = mode
+        assert mode in ("eval", "demo")
+
+    def __call__(self, L, scores, T=1.0):
+        probs = F.softmax(scores, dim=1)
+        B, C, H, W = probs.size()
+        probs = probs.transpose(0, 1).unsqueeze(0)
+        probs = probs.reshape(1, C, -1)
+        if T < 1.0:
+            probs = annealed_mean(probs, T=T)
+        ab_pred = torch.bmm(self.ab, probs)
+        ab_pred = ab_pred.reshape(2, B, H, W)
+        ab_pred = ab_pred.transpose(0, 1)
+        predicted = torch.cat([L, ab_pred], dim=1)
+        predicted = predicted.permute(0, 2, 3, 1).cpu().numpy()
+        predicted = color.lab2rgb(predicted)
+        if self.mode == "eval":
+            predicted = torch.tensor(predicted, device=self.device)
+            predicted = predicted.permute(0, -1, 1, 2)
+        elif self.mode == "demo":
+            predicted = predicted.squeeze(0)
+        return predicted

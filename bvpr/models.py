@@ -122,7 +122,7 @@ class ColorizationModel(nn.Module):
         self.mask_predictor = SegmentationHead(
             self.config["multimodal_encoder"]["num_kernels"],
             self.config["mask_predictor"]["num_classes"],
-            upsampling=2)
+            upsampling=2**(self.image_encoder.num_downsample-2))
 
     def setup_submodule(self, model_config, submodule, **kwargs):
         config = model_config[submodule]
@@ -148,9 +148,12 @@ class ColorizationBaseline(nn.Module):
             config["image_encoder"],
             config["use_location_embeddings"],
         )
-        self.network = AutocolorizeResnet(vectors=config["vectors"], **config["network"])
-        del config["vectors"]
+        vectors = config.get("vectors")
+        self.network = AutocolorizeResnet(vectors=vectors, **config["network"])
+        if vectors is not None:
+            del config["vectors"]
 
-    def forward(self, features, caption, caption_l):
+    def forward(self, image, caption, caption_l):
+        features = self.image_encoder(image)
         output = self.network(features, caption, caption_l)
         return output[-1]

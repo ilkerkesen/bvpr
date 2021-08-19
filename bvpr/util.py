@@ -48,7 +48,8 @@ def process_config(cfg, dataset, task="segmentation"):
     elif encoder == "mobilenetv2":
         predictor_num_layers = MOBILENET_SIZE_MAP[encoder_num_layers-1][1]
 
-    model, text_encoder = cfg["architecture"], cfg["text_encoder"]["name"]
+    model = cfg["architecture"]
+    text_encoder = "LSTMEncoder"
     if task == "segmentation":
         cfg["text_encoder"]["corpus"] = dataset.corpus
         cfg["mask_predictor"]["num_layers"] = predictor_num_layers
@@ -59,7 +60,7 @@ def process_config(cfg, dataset, task="segmentation"):
         cfg["mask_predictor"]["num_layers"] = predictor_num_layers
         cfg["text_encoder"]["corpus"] = dataset.corpus
     elif model == "ColorizationBaseline":
-        cfg["vectors"] = dataset.embeddings
+        cfg["network"]["corpus"] = dataset.corpus
 
     return cfg
 
@@ -211,3 +212,14 @@ def scores2rgb(scores, L, ab_mask):
     predicted = torch.tensor(color.lab2rgb(predicted), device=rgbs.device)
     predicted = torch.round(predicted.permute(0, -1, 1, 2) * 255)
     return predicted
+
+
+def pretty_acc(val):
+    return round(100 * val, 2)
+
+
+def inf_clamp(tensor):
+    if torch.isinf(tensor).any():
+        clamp_value = torch.finfo(tensor.dtype).max - 1000
+        tensor = torch.clamp(tensor, min=-clamp_value, max=clamp_value)
+    return tensor

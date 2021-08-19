@@ -7,14 +7,16 @@ import torch.nn.functional as F
 import numpy as np
 from scipy.spatial.distance import euclidean
 from torchvision import transforms as ts
+from skimage import color
 import cv2
 
-from bvpr.models import SegmentationModel, ColorizationModel
+from bvpr.models import ColorizationBaseline, SegmentationModel, ColorizationModel
 from bvpr.datamodule import SegmentationDataModule, ColorizationDataModule
+from bvpr.data.transform import LAB2RGB
 from bvpr.data.colorization import cvrgb2lab
 from bvpr.util import sizes2scales, scales2sizes, annealed_mean
 from bvpr.evaluation import compute_pixel_acc
-from skimage import color
+from bvpr.data.transform import LAB2RGB
 
 
 class SegmentationDemo(object):
@@ -381,12 +383,12 @@ class WordRemovalActivationDemo(SegmentationDemo):
 
 
 class ColorizationDemo(object):
-    def __init__(self, checkpoint_path, data_path, device="cuda:0"):
+    def __init__(self, checkpoint_path, dataset, data_path, device="cuda:0"):
         data_config = {
             "image_size": 224,
 
             "dataset": {
-                "dataset": "colors",
+                "dataset": dataset,
                 "data_root": data_path,
             },
 
@@ -404,10 +406,6 @@ class ColorizationDemo(object):
         # load data
         self.data_module = ColorizationDataModule(data_config)
         self.data_module.setup()
-        self.w2i = self.data_module.train_data.vocab
-        self.i2w = dict()
-        for (w, i) in self.w2i.items():
-            self.i2w[i] = w
 
         # load model
         ckpt = torch.load(self.checkpoint_path)
@@ -415,46 +413,28 @@ class ColorizationDemo(object):
         self.weights = ckpt["state_dict"].get("criterion.weights", None)
         state_dict = {".".join(k.split(".")[1:]): v for (k, v) in state_dict if k.startswith("model")}
         model_config = ckpt["hyper_parameters"]["model"]
-        model_config["text_encoder"]["vectors"] = self.data_module.train_data.embeddings
-        self.model = ColorizationModel(model_config).to(device)
+        # model_config["text_encoder"]["vectors"] = self.data_module.train_data.embeddings
+        Model = ColorizationModel
+        if model_config["architecture"] == "ColorizationBaseline":
+            Model = ColorizationBaseline
+        self.model = Model(model_config).to(device)
         self.model.load_state_dict(state_dict)
         self.model.eval()
-
-        # setup utils
-        a_ = torch.unsqueeze(torch.arange(625) // 25, 0)
-        b_ = torch.unsqueeze(torch.arange(625) % 25, 0)
-        ab_ = 10 * torch.cat([a_, b_], dim=0) - 120
-        ab_ = ab_.unsqueeze(0).float()
-        self.ab = ab_[:, :, self.data_module.test_data.ab_mask]
+        self.lab2rgb = LAB2RGB(
+            ab_mask=self.data_module.train_data.ab_mask,
+            device=device,
+            mode="demo",
+        )
+        self.demo_data = self.data_module.demo_data
 
     def get_data(self, index, custom_caption=None):
-        data = self.data_module.test_data
-        f1, f2, split = data.data_file, data.features_file, data.split
-        image = f1[f"{split}_ims"][index]
-        lab = cvrgb2lab(image)
-        input = lab[:, :, :1]
-        target = lab[::4, ::4, 1:]
-        target = data.lookup_enc.encode_points(target)
-        target = torch.tensor(target).long()
-        features = f2[f"{split}_features"][index]
-        caption = f1[f"{split}_words"][index]
-        caption = torch.tensor(caption.astype("long"))
-        caption_l = f1[f"{split}_length"][index]
+        data = self.demo_data
+        example = data[index]
         if custom_caption is not None:
-            unk = self.w2i["unknown"]
-            caption = [self.w2i.get(word, unk) for word in custom_caption.split()]
-            caption = torch.tensor(caption)
-            caption_l = caption.numel()
-        if data.reduce_colors:
-            target = data.color2index[target]
-        return (
-            cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
-            input,
-            torch.tensor(features),
-            caption,
-            caption_l,
-            target,
-        )
+            example["caption"] = data.tokenize_caption(custom_caption)    
+            example["caption_len"] = len(example["caption"])
+        example["raw_caption"] = data.captions[index]["caption"]
+        return example
 
     def predict(self, features, caption, caption_l):
         device = self.device
@@ -465,49 +445,36 @@ class ColorizationDemo(object):
         return scores
 
     def visualize(self, example_id, custom_caption=None, averaged=True, T=1.0):
-        image, input, features, caption, caption_l, target = self.get_data(
-            example_id, custom_caption)
-        scores = self.predict(features, caption, caption_l)
+        this = self.get_data(example_id, custom_caption)
+        scores = self.predict(
+            this["input_image"], this["caption"], this["caption_len"])
         upsampled = F.interpolate(scores, scale_factor=4, mode="bilinear")
-        probs = F.softmax(upsampled, dim=1)
-        probs = annealed_mean(probs, T=T)
-        H, W = probs.shape[-2:]
-        ab_pred = None
-
-        if averaged:
-            ab_pred = torch.bmm(self.ab, probs.reshape(1, probs.shape[1], -1))
-            ab_pred = ab_pred.reshape(2, probs.shape[-2], probs.shape[-1])
-            ab_pred = ab_pred.permute(1, 2, 0)
-        else:
-            ab_pred = probs.argmax(dim=1)
-            ab_pred = self.test_data.index2color[ab_pred]
-            a = ab_pred // 25
-            b = ab_pred % 25
-            ab_pred = 10 * torch.cat([a, b], dim=0) - 128
-            ab_pred = ab_pred.permute(1,2,0).numpy()
-
-        lab = color.rgb2lab(image)
-        colorized = np.empty((H, W, 3))
-        colorized[:, :, 0] = lab[:, :, 0]
-        colorized[:, :, 1:] = ab_pred
-        colorized_rgb = color.lab2rgb(colorized)
+        colorized = self.lab2rgb(
+            this["L"].unsqueeze(0).to(self.device),
+            upsampled.to(self.device),
+            T=T)
 
         scale = 10.
         fig = plt.figure(figsize=(3 * scale, scale))
         grid = ImageGrid(
-            fig, 111, nrows_ncols=(1,3), axes_pad=0.5)
+            fig, 111, nrows_ncols=(2, 3), axes_pad=0.5)
 
-        target = target.unsqueeze(0)
-        top5_pred = scores.topk(5, dim=1).indices == target
-        top1, top5, num_pixels = compute_pixel_acc(scores, target)
-        grayscale = np.stack([lab[:, :, 0] / 100.] * 3, axis=-1)
+        L = np.stack([this["L"].squeeze(0)] * 3, axis=-1) / 100.
+        gold = this["rgb"].permute(1, 2, 0)
+        targets = this["target"].unsqueeze(0)
+        topk_pred = scores.topk(5, dim=1).indices == targets
+        topk_pred = topk_pred.float()
+        top1_pred = topk_pred[:, :1, :, :]
+        top5_pred = topk_pred.sum(dim=1, keepdim=True)
+        top1_pred = F.interpolate(top1_pred, scale_factor=4, mode='nearest')[0, 0]
+        top5_pred = F.interpolate(top5_pred, scale_factor=4, mode='nearest')[0, 0]
 
         images = [
-            ("image", grayscale),
-            ("ground truth", image),
-            ("colorized", colorized_rgb),
-            # ("top-1", top5_pred[0, 0, :, :].float()),
-            # ("top-5", top5_pred.sum(dim=1)[0].float()),
+            ("input", L),
+            ("ground truth", gold),
+            ("colorized", colorized),
+            ("top-1", top1_pred),
+            ("top-5", top5_pred),
         ]
 
         for ax, (title, im) in zip(grid, images):
@@ -516,7 +483,10 @@ class ColorizationDemo(object):
             ax.imshow(im)
         plt.show()
 
-        caption = caption.detach().cpu().tolist()[:caption_l]
-        caption = " ".join([self.i2w[word_index] for word_index in caption])
+        caption = this["raw_caption"]
+        if custom_caption is not None:
+            caption = custom_caption
         print(f"caption: {caption}")
-        print(f"top-1: {top1 / num_pixels}, top-5: {top5 / num_pixels}")
+        top1_acc = round(100 * top1_pred.mean().item(), 2)
+        top5_acc = round(100 * top5_pred.mean().item(), 2)
+        print(f"top1={top1_acc}%, top5={top5_acc}%")

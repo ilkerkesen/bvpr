@@ -1,0 +1,59 @@
+#!/usr/bin/env python
+
+import os
+import os.path as osp
+import json
+import click
+import torch
+from skimage import io, color
+from tqdm import tqdm
+import numpy as np
+from torchvision.transforms import *
+from multiprocessing import Pool
+
+
+transform = Compose([
+    Lambda(lambda x: color.rgb2lab(x)[:, :, 1:]),
+    ToTensor(),
+    Resize(56),
+])
+
+
+def count_values(image_path):
+    image = io.imread(image_path)
+    if len(image.shape) == 2:
+        image = np.stack([image] * 3, axis=-1)
+    image = transform(image) + 120
+    q = torch.round(image / 10).long()
+    k = q[0, :, :] * 25 + q[1, :, :]
+    return k.flatten().bincount(minlength=625)
+
+
+@click.command()
+@click.option("--image-dir", required=True, type=click.Path(exists=True))
+@click.option("--output-file", required=True, type=click.Path())
+@click.option("--batch-size", default=5, type=int)
+@click.option("--prefix", default=None, type=str)
+def main(image_dir, output_file, batch_size, prefix):
+    image_dir = osp.abspath(osp.expanduser(image_dir))
+    filenames = os.listdir(image_dir)
+    if prefix is not None:
+        filenames = [f for f in filenames if f.starswith(prefix)]
+
+    count_tensor = torch.zeros((1, 625), dtype=torch.long)
+    with Pool(batch_size) as p:
+        for i in tqdm(range(0, len(filenames), batch_size)):
+            batch_filenames = filenames[i:i+batch_size]
+            batch_paths = [osp.join(image_dir, x) for x in batch_filenames]
+            tensors = p.map(count_values, batch_paths)
+            for t in tensors:
+                count_tensor = count_tensor + t
+    count_array = count_tensor.clone().cpu().numpy()
+    priors = count_array / count_array.sum()
+    np.save(output_file, priors)
+
+    print("done")
+
+
+if __name__ == "__main__":
+    main()

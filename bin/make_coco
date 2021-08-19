@@ -1,0 +1,98 @@
+#!/usr/bin/env python
+
+import os
+import os.path as osp
+import json
+import click
+import torch
+import h5py
+from skimage import io
+import pickle
+from tqdm import tqdm
+from bvpr.data.corpus import Corpus
+from bvpr.data.colorization import PAD_TOKEN, UNK_TOKEN, SOS_TOKEN
+from torchtext.data import get_tokenizer
+
+
+def count_words(data):
+    count_dict = dict()
+    tokenizer = get_tokenizer("basic_english")
+    for entry in data:
+        caption = entry["caption"].lower()
+        tokens = tokenizer(caption)
+        for token in tokens:
+            count_dict[token] = 1 + count_dict.get(token, 0)
+    return count_dict
+
+
+def create_vocab(count_dict, min_occur, output_dir):
+    word_counts = sorted(count_dict.items(), key=lambda x: x[1], reverse=True)
+    word_counts = [
+        (word, count)
+        for (word, count) in word_counts
+        if count >= min_occur]
+    corpus = Corpus()
+    corpus.dictionary.add_word(PAD_TOKEN)
+    for (word, _) in word_counts:
+        corpus.dictionary.add_word(word)
+    corpus.dictionary.add_word(UNK_TOKEN)
+    corpus.dictionary.add_word(SOS_TOKEN)
+    corpus_file = osp.join(output_dir, f"corpus-{min_occur}.pth")
+    torch.save(corpus, corpus_file)
+
+
+@click.command()
+@click.option("--train-file", required=True, type=click.Path(exists=True))
+@click.option("--val-file", required=True, type=click.Path(exists=True))
+@click.option("--output-dir", required=True, type=click.Path())
+def main(train_file, val_file, output_dir):
+    train_file = osp.abspath(osp.expanduser(train_file))
+    val_file = osp.abspath(osp.expanduser(val_file))
+    output_dir = osp.abspath(osp.expanduser(output_dir))
+    output_file = osp.join(output_dir, "dataset.json")
+    corpus_file = osp.join(output_dir, "corpus-0.pth")
+
+    # make dirs
+    if not osp.isdir(output_dir):
+        os.makedirs(output_dir)
+
+    with open(train_file, "r") as f:
+        orig_train_data = json.load(f)
+
+    image_dict = dict()
+    for entry in orig_train_data["images"]:
+        image_id = entry["id"]
+        image_dict[image_id] = entry["file_name"]
+
+    train_data = []
+    for entry in tqdm(orig_train_data["annotations"]):
+        image_id = entry["image_id"]
+        image_file = image_dict[image_id]
+        example_id = entry["id"]
+        caption = entry["caption"]
+        split = "train"
+
+        train_data.append({
+            "image_file": image_file,
+            "example_id": example_id,
+            "caption": caption,
+            "split": split,
+        })
+
+    with open(val_file, "r") as f:
+        val_data = json.load(f)
+        val_data = [x for x in val_data if x["split"] == "val"]
+
+    data = train_data + val_data
+    with open(output_file, "w") as f:
+        json.dump(data, f, indent=4)
+
+    # make corpus
+    count_dict = count_words(train_data)
+    create_vocab(count_dict, 0, output_dir)
+    create_vocab(count_dict, 5, output_dir)
+    print("done")
+
+
+if __name__ == "__main__":
+    main()

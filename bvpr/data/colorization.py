@@ -35,7 +35,7 @@ class ColorizationDataset(Dataset):
         self.data_root = osp.abspath(osp.expanduser(data_root))
         self.split = split
         self.year = year
-        self.image_dir = osp.join(self.data_root, f"{self.split}{self.year}") 
+        self.image_dir = osp.join(self.data_root, f"{self.split}{self.year}")
         self.features_dir = features_dir
         if features_dir is not None:
             features_dir = osp.abspath(osp.expanduser(features_dir))
@@ -205,7 +205,7 @@ class BaseColorsDataset(Dataset):
     def __init__(self, data_root, split="train", max_query_len=20,
                  transform=None, L_transform=None, ab_transform=None,
                  raw_L_transform=None, rgb_transform=None, tokenize=True,
-                 reduce_colors=False, min_occur=5, **kwargs):
+                 reduce_colors=True, min_occur=5, gamma=0.5, **kwargs):
         super().__init__()
         self.data_root = osp.abspath(osp.expanduser(data_root))
         self.split = split
@@ -219,17 +219,35 @@ class BaseColorsDataset(Dataset):
         self.ab_transform = ab_transform
         self.raw_L_transform = raw_L_transform
         self.rgb_transform = rgb_transform
+        self.gamma = gamma
         self.load_data()
+        self.corpus = self.load_corpus(min_occur=min_occur)
+        self.load_priors()
+        self.setup_discritizer()
+
+    def load_priors(self, prior_set="coco"):
+        if prior_set == "coco":
+            self.load_coco_priors()
+        else:
+            pass
+
+    def load_coco_priors(self):
         priors_path = osp.join(self.data_root, "priors-56x56.npy")
         self.raw_priors = torch.from_numpy(
-            prior_boosting(priors_path, 1.0, 0.5)).float()
+            prior_boosting(priors_path, 1.0, gamma)).float()
+        self.raw_priors = self.raw_priors.flatten()
         self.num_colors = self.raw_priors.numel()
         self.ab_mask = self.raw_priors > 0
         self.color2index = -torch.ones(self.num_colors).long()
         self.color2index[self.ab_mask] = torch.arange(self.ab_mask.sum())
         self.index2color = torch.arange(self.num_colors)[self.ab_mask]
         self.priors = self.raw_priors[self.raw_priors > 0]
-        self.corpus = self.load_corpus(min_occur=min_occur)
+
+    def setup_discretizer(self, prior_set="coco"):
+        if prior_set == "coco":
+            self.discretizer = ABColorDiscretizer()
+        elif prior_set == "imagenet":
+            pass
 
     def load_data(self):
         with open(self.json_file, "r") as f:
@@ -247,7 +265,7 @@ class BaseColorsDataset(Dataset):
             if x["split"] == "train"
         ]
 
-        count_dict = dict()        
+        count_dict = dict()
         for sentence in train_sentences:
             tokens = self.tokenizer(sentence.lower())
             for token in tokens:
@@ -303,13 +321,13 @@ class BaseColorsDataset(Dataset):
 
         if self.ab_transform is not None:
             ab = self.ab_transform(image)
-            if self.reduce_colors:
-                ab = self.color2index[ab]
+            ab = self.ab_discretizer(ab)
+            ab = self.reduce_colors(ab)
 
         raw_L = None
-        if self.raw_L_transform is not None: 
+        if self.raw_L_transform is not None:
             raw_L = self.raw_L_transform(image)
-        
+
         rgb = None
         if self.rgb_transform is not None:
             rgb = self.rgb_transform(image)
@@ -321,6 +339,7 @@ class BaseColorsDataset(Dataset):
             "target": ab,
             "L": raw_L,
             "rgb": rgb,
+            "index" : index,
         }
 
 
@@ -329,9 +348,22 @@ class FlowersDataset(BaseColorsDataset):
 
 
 class ColorsDataset(BaseColorsDataset):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.embeddings = pickle.load(
+            open(osp.join(self.data_root, "w2v_embeddings_colors.p"), "rb"),
+            encoding="iso-8859-1")
+        self.embeddings = torch.tensor(self.embeddings, dtype=torch.float)
+
     def load_corpus(self, min_occur):
         corpus_file = osp.join(self.data_root, "corpus-0.pth")
         return torch.load(corpus_file)
+
+
+class COCODataset(BaseColorsDataset):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.image_dir = osp.join(self.data_root, "images", self.split)
 
 
 class LookupEncode(object):

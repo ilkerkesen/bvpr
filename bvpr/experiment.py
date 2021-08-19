@@ -1,5 +1,8 @@
+from bvpr.datamodule import color_collate_fn
 import os
 import os.path as osp
+from functools import reduce
+from math import isnan
 
 import numpy as np
 import torch
@@ -8,11 +11,14 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Variable
 from pytorch_lightning import LightningModule
-from skimage import color
+from torchvision.utils import make_grid
+import lpips
 
 from bvpr.models import *
 from bvpr.criterion import *
 from bvpr.evaluation import *
+from bvpr.data.transform import LAB2RGB
+from bvpr.util import pretty_acc
 
 
 class BaseExperiment(LightningModule):
@@ -165,20 +171,14 @@ class ColorizationExperiment(BaseExperiment):
         if priors is not None:
             priors = Variable(priors)
         self.criterion = nn.CrossEntropyLoss(weight=priors, ignore_index=-1)
-        self.setup_ab_map()
-
-    def setup_ab_map(self, ab_mask=None):
-        a = torch.unsqueeze(torch.arange(625) // 25, 0)
-        b = torch.unsqueeze(torch.arange(625) % 25, 0)
-        self.ab = 10 * torch.cat([a, b], dim=0) - 120
-        self.ab = self.ab.unsqueeze(0).float()
-        if ab_mask is not None:
-            self.ab = self.ab[:, :, ab_mask]
-        self.ab = self.ab.to("cuda:0")  # FIXME
+        self.lab2rgb = LAB2RGB()
+        self.loss_fn_alex = lpips.LPIPS(net='alex').to("cuda:0")
 
     def training_step(self, batch, batch_index):
         scores = self(batch["images"], batch["captions"], batch["captions_l"])
         loss = self.criterion(scores, batch["targets"])
+        if isnan(loss.item()):
+            import ipdb; ipdb.set_trace()
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
@@ -194,29 +194,29 @@ class ColorizationExperiment(BaseExperiment):
         num_pixels = targets.numel()
 
         rgbs = torch.round(255 * batch["rgbs"])
-        probs = F.softmax(scores, dim=1)
-        B, C, H, W = probs.size()
-        probs = probs.transpose(0, 1).unsqueeze(0)
-        probs = probs.reshape(1, C, -1)
-        ab_pred = torch.bmm(self.ab, probs)
-        ab_pred = ab_pred.reshape(2, B, H, W)
-        ab_pred = ab_pred.transpose(0, 1)
-        predicted = torch.cat([batch["Ls"], ab_pred], dim=1)
-        predicted = predicted.permute(0, 2, 3, 1).cpu().numpy()
-        predicted = torch.tensor(color.lab2rgb(predicted), device=rgbs.device)
-        predicted = torch.round(predicted.permute(0, -1, 1, 2) * 255)
+        pred = torch.round(255 * self.lab2rgb(batch["Ls"], scores))
+        psnr_val = psnr(pred, rgbs)
+
+        rgbs = rgbs / (255. / 2.) - 1.
+        pred = pred / (255. / 2.) - 1.
+        d = self.loss_fn_alex(pred, rgbs)
+        lpips_val = d.mean().item()
+
+        if isnan(loss.item()) or isnan(lpips_val) or isnan(psnr_val.item()):
+            import ipdb; ipdb.set_trace()
 
         return {
             "loss": loss,
             "N": num_pixels,
             "top1": top1,
             "top5": top5,
-            "psnr": psnr(predicted, rgbs),
+            "psnr": psnr_val,
+            "lpips": lpips_val,
         }
 
     def validation_epoch_end(self, outputs):
         num_pixels = num_batches = 0
-        total_loss = psnr_val = 0.0
+        total_loss = psnr_val = lpips_val = 0.0
         top1 = top5 = 0
 
         for output in outputs:
@@ -226,36 +226,99 @@ class ColorizationExperiment(BaseExperiment):
             top1 += output["top1"]
             top5 += output["top5"]
             psnr_val += output.get("psnr", 0.0)
+            lpips_val += output.get("lpips", 0.0)
 
         self.log("val_loss", total_loss / num_pixels)
         self.log("val_top1_acc", top1 / num_pixels, prog_bar=True)
         self.log("val_top5_acc", top5 / num_pixels, prog_bar=True)
         self.log("val_psnr", psnr_val / num_batches, prog_bar=True)
+        self.log("val_lpips", lpips_val / num_batches, prog_bar=True)
+        self.colorize_val_images()
+        
+    def colorize_val_images(self):
+        example_sets = [
+            ("a [red,green,blue,purple] car parked on a rainy street", 4269, [
+                "a red car parked on a rainy street",
+                "a green car parked on a rainy street",
+                "a blue car parked on a rainy street",
+                "a purple car parked on a rainy street",
+            ]),
+
+            ("a woman posing and riding on a [red,green,blue,purple] motorcycle", 7150, [
+                "a woman posing and riding on a red motorcycle",
+                "a woman posing and riding on a green motorcycle",
+                "a woman posing and riding on a blue motorcycle",
+                "a woman posing and riding on a purple motorcycle",
+            ]),
+
+            ("a bird is flying against a [red,gray,blue,yellow] sky", 768, [
+                "a bird is flying against a red sky",
+                "a bird is flying against a gray sky",
+                "a bird is flying against a blue sky",
+                "a bird is flying against a yellow sky",
+            ]),
+
+            ("a small dog sits on a [red,green,blue] sofa", 335, [
+                "a small dog sits on a red sofa",
+                "a small dog sits on a green sofa",
+                "a small dog sits on a blue sofa",
+            ]),
+        ]
+
+        dataset = self.val_dataloader().dataset
+        for (title, index, captions) in example_sets:
+            examples = []
+            for caption in captions:
+                this = dataset[index]
+                this["caption"] = dataset.tokenize_caption(caption)
+                this["caption_len"] = len(this["caption"])
+                examples.append(this)
+            
+            batch = color_collate_fn(examples)
+            images = batch["images"].to(self.device)
+            captions = batch["captions"].to(self.device)
+            Ls = batch["Ls"].to(self.device)
+            scores = self(images, captions, batch["captions_l"])
+            pred = self.lab2rgb(Ls, scores)
+            pred = F.interpolate(pred, scale_factor=4, mode="bilinear")
+            grid = make_grid(pred, nrow=8)
+            self.logger.experiment.add_image(f"caption: {title}", grid, self.current_epoch)
 
     def test_step(self, batch, batch_index):
-        L, caption, size, ab = batch
-        scores = self(L, caption, size)
-        loss = self.criterion(scores[-1], ab.squeeze(1))
-        top1, top5, num_pixels = compute_pixel_acc(scores[-1], ab)
+        targets = batch["targets"]
+        scores = self(batch["images"], batch["captions"], batch["captions_l"])
+        topk_pred = scores.topk(5, dim=1).indices == targets.unsqueeze(1)
+        B, K, H, W = topk_pred.shape
+        topk_pred = topk_pred.reshape(B, K, H*W)
+        top1 = topk_pred[:, 0, :].half().mean(dim=1)
+        top5 = topk_pred.half().sum(dim=1).mean(dim=1)
 
-        return {
-            "loss": loss,
-            "N": num_pixels,
-            "top1": top1,
-            "top5": top5,
-        }
+        rgbs = torch.round(255 * batch["rgbs"])
+        pred = torch.round(255 * self.lab2rgb(batch["Ls"], scores))
+        mse = torch.mean(torch.abs(pred - rgbs)**2, dim=(1,2,3))
+        psnr_vals = 10*torch.log10(255**2 / (mse + 1e-7))
+
+        rgbs = rgbs / (255. / 2.) - 1.
+        pred = pred / (255. / 2.) - 1.
+        lpips_vals = self.loss_fn_alex(pred, rgbs).flatten()
+        output = []
+        for i in range(B):
+            output.append((
+                batch["indexes"][i],
+                pretty_acc(top1[i].item()),
+                pretty_acc(top5[i].item()),
+                round(psnr_vals[i].item(), 2),
+                round(lpips_vals[i].item(), 4),
+            ))
+
+        return output
 
     def test_epoch_end(self, outputs):
-        num_pixels = 0
-        total_loss = 0.0
-        top1 = top5 = 0
-
-        for output in outputs:
-            num_pixels += output["N"]
-            total_loss += output["loss"] * output["N"]
-            top1 += output["top1"]
-            top5 += output["top5"]
-
-        self.log("val_loss", total_loss / num_pixels)
-        self.log("val_top1_acc", top1 / num_pixels, prog_bar=True)
-        self.log("val_top5_acc", top5 / num_pixels)
+        output_file = osp.abspath(osp.expanduser(self.config["output"]))
+        with open(output_file, "w") as f:
+            f.write("idx,top1,top5,psnr,lpips\n")
+            for batch_output in outputs:
+                batch_output = sorted(batch_output, key=lambda x: x[0])
+                for output in batch_output:
+                    line = ",".join([str(x) for x in output]) + "\n"
+                    f.write(line)
