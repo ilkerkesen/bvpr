@@ -196,7 +196,7 @@ def prior_boosting(prior_file, alpha, gamma):
 
 def annealed_mean(z, T=1.0, dim=1):
     num = torch.exp(torch.log(z) / T)
-    den = torch.sum(num, dim=1)
+    den = torch.sum(num, dim=1, keepdim=True)
     return num / den
 
 

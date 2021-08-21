@@ -44,14 +44,14 @@ def make_raw_L_transform(image_dim):
 
 
 def make_ab_transform(image_dim, ab_minval=-120):
-    discretizer = ABColorDiscretizer(ab_minval)
+    # discretizer = ABColorDiscretizer(ab_minval)
     return ts.Compose([
         ts.Resize(image_dim),
         ts.Lambda(lambda x: x.permute(1, 2, 0)),
         ts.Lambda(lambda x: color.rgb2lab(x)),
         ts.Lambda(lambda x: x[:, :, 1:]),
-        ts.ToTensor(),
-        discretizer,
+        # ts.ToTensor(),
+        # discretizer,
     ])
 
 
@@ -198,6 +198,12 @@ def color_collate_fn(batch):
         captions[i, :bi["caption_len"]] = bi["caption"]
     captions_l = [bi["caption_len"] for bi in batch]
     targets = torch.cat([bi["target"].unsqueeze(0) for bi in batch], dim=0)
+    
+    # prepare soft targets
+    soft_targets = None
+    if batch[0]["soft_target"] is not None:
+        soft_targets = [bi["soft_target"].unsqueeze(0) for bi in batch]
+        soft_targets = torch.cat(soft_targets, dim=0)
 
     # for validation / testing
     Ls = rgbs = None
@@ -211,6 +217,7 @@ def color_collate_fn(batch):
         "captions": captions,
         "captions_l": captions_l,
         "targets": targets,
+        "soft_targets": soft_targets,
         "Ls": Ls,
         "rgbs": rgbs,
         "indexes": indexes,

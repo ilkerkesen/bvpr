@@ -64,28 +64,16 @@ class ABColorDiscretizer(object):
 
 
 class LAB2RGB(object):
-    def __init__(self, ab_mask=None, device="cuda:0", mode="eval"):
-        a = torch.unsqueeze(torch.arange(625) // 25, 0)
-        b = torch.unsqueeze(torch.arange(625) % 25, 0)
-        self.ab = 10 * torch.cat([a, b], dim=0) - 120
-        self.ab = self.ab.unsqueeze(0).float()
-        if ab_mask is not None:
-            self.ab = self.ab[:, :, ab_mask]
+    def __init__(self, ab_kernel=None, device="cuda:0", mode="eval"):
         self.device = torch.device(device)
-        self.ab = self.ab.to(self.device)
+        self.ab_kernel = ab_kernel.to(self.device)
         self.mode = mode
         assert mode in ("eval", "demo")
 
     def __call__(self, L, scores, T=1.0):
         probs = F.softmax(scores, dim=1)
-        B, C, H, W = probs.size()
-        probs = probs.transpose(0, 1).unsqueeze(0)
-        probs = probs.reshape(1, C, -1)
-        if T < 1.0:
-            probs = annealed_mean(probs, T=T)
-        ab_pred = torch.bmm(self.ab, probs)
-        ab_pred = ab_pred.reshape(2, B, H, W)
-        ab_pred = ab_pred.transpose(0, 1)
+        probs = annealed_mean(probs, T=T) 
+        ab_pred = F.conv2d(probs, self.ab_kernel)
         predicted = torch.cat([L, ab_pred], dim=1)
         predicted = predicted.permute(0, 2, 3, 1).cpu().numpy()
         predicted = color.lab2rgb(predicted)

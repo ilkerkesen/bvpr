@@ -7,6 +7,7 @@ import cv2
 import h5py
 import pickle
 import numpy as np
+from torchvision.transforms.transforms import ToTensor
 from tqdm import tqdm
 from skimage import io, color
 import torch
@@ -16,6 +17,7 @@ from torch.utils.data import Dataset
 from torchvision.datasets import CocoCaptions
 from torchvision import transforms as tr
 from torchtext.data import get_tokenizer
+from sklearn.neighbors import NearestNeighbors
 
 from bvpr.data.corpus import Corpus
 from bvpr.util import prior_boosting
@@ -205,12 +207,12 @@ class BaseColorsDataset(Dataset):
     def __init__(self, data_root, split="train", max_query_len=20,
                  transform=None, L_transform=None, ab_transform=None,
                  raw_L_transform=None, rgb_transform=None, tokenize=True,
-                 reduce_colors=True, min_occur=5, gamma=0.5, **kwargs):
+                 prior_set="coco", min_occur=5, gamma=0.5, sigma=5.0, K=1, **kwargs):
         super().__init__()
         self.data_root = osp.abspath(osp.expanduser(data_root))
         self.split = split
         self.tokenize = tokenize
-        self.reduce_colors = reduce_colors
+        # self.reduce_colors = reduce_colors
         self.json_file = osp.join(data_root, "dataset.json")
         self.image_dir = osp.join(data_root, "jpg")
         self.tokenizer = get_tokenizer("basic_english")
@@ -220,34 +222,94 @@ class BaseColorsDataset(Dataset):
         self.raw_L_transform = raw_L_transform
         self.rgb_transform = rgb_transform
         self.gamma = gamma
+        self.sigma = sigma
+        self.K = K
+        self.prior_set = prior_set
         self.load_data()
         self.corpus = self.load_corpus(min_occur=min_occur)
         self.load_priors()
-        self.setup_discritizer()
+        self.setup_ab_discretizer()
+        self.setup_ab_kernel()
 
-    def load_priors(self, prior_set="coco"):
-        if prior_set == "coco":
+    def load_priors(self):
+        if self.prior_set == "coco":
             self.load_coco_priors()
         else:
-            pass
+            self.load_imagenet_priors()
 
     def load_coco_priors(self):
         priors_path = osp.join(self.data_root, "priors-56x56.npy")
         self.raw_priors = torch.from_numpy(
-            prior_boosting(priors_path, 1.0, gamma)).float()
+            prior_boosting(priors_path, 1.0, self.gamma)).float()
         self.raw_priors = self.raw_priors.flatten()
-        self.num_colors = self.raw_priors.numel()
+        num_points = self.raw_priors.numel()
         self.ab_mask = self.raw_priors > 0
-        self.color2index = -torch.ones(self.num_colors).long()
+        self.color2index = -torch.ones(num_points).long()
         self.color2index[self.ab_mask] = torch.arange(self.ab_mask.sum())
-        self.index2color = torch.arange(self.num_colors)[self.ab_mask]
+        self.index2color = torch.arange(num_points)[self.ab_mask]
         self.priors = self.raw_priors[self.raw_priors > 0]
+        self.num_colors = self.priors.numel()
 
-    def setup_discretizer(self, prior_set="coco"):
-        if prior_set == "coco":
-            self.discretizer = ABColorDiscretizer()
-        elif prior_set == "imagenet":
-            pass
+    def load_imagenet_priors(self):
+        priors_path = osp.join(self.data_root, "imagenet-priors.npy")
+        self.priors = torch.from_numpy(
+            prior_boosting(priors_path, 1.0, self.gamma)).float()
+        self.num_colors = self.priors.numel()
+
+    def setup_ab_discretizer(self):
+        if self.prior_set == "coco":
+            self.ab_discretizer = tr.Compose([
+                tr.ToTensor(),
+                ABColorDiscretizer(),
+                tr.Lambda(lambda ab: self.color2index[ab]),
+                tr.Lambda(lambda ab: (ab, None)),
+            ])
+        elif self.prior_set == "imagenet":
+            self.hull = np.load(osp.join(self.data_root, "color-grid.npy"))
+            self.nbrs = NearestNeighbors(
+                n_neighbors=self.K,
+                algorithm='ball_tree')
+            self.nbrs.fit(self.hull)
+            self.ab_discretizer = self.imagenet_discretizer
+            self.p_inds = None
+            self.to_tensor = tr.ToTensor()
+
+    def imagenet_discretizer(self, ab):
+        H, W, _ = ab.shape
+        if self.p_inds is None:
+            self.p_inds = np.arange(0, H*W, dtype='int')[:, np.newaxis]
+        ab = ab.reshape(-1, 2)
+        dists, inds = self.nbrs.kneighbors(ab)
+        hard_targets = torch.tensor(inds[:, 0].reshape(H, W))
+        soft_targets = None
+        if self.K > 1:
+            soft_targets = np.zeros((H*W, self.num_colors))
+            wts = np.exp(-dists**2/(2*self.sigma**2))
+            wts = wts/np.sum(wts,axis=1)[:, np.newaxis]
+            soft_targets[self.p_inds, inds] = wts
+            soft_targets = soft_targets.reshape(H, W, self.num_colors)
+            soft_targets = self.to_tensor(soft_targets)
+        return hard_targets, soft_targets
+
+    def setup_ab_kernel(self):
+        if self.prior_set == "coco":
+            self.setup_coco_ab_kernel()
+        elif self.prior_set == "imagenet":
+            self.setup_imagenet_ab_kernel()
+
+    def setup_coco_ab_kernel(self):
+        a = torch.unsqueeze(torch.arange(625) // 25, 0)
+        b = torch.unsqueeze(torch.arange(625) % 25, 0)
+        self.ab_kernel = 10 * torch.cat([a, b], dim=0) - 120
+        self.ab_kernel = self.ab_kernel.float()
+        self.ab_kernel = self.ab_kernel[:, self.ab_mask]
+        K = self.ab_kernel.shape[1]
+        self.ab_kernel = self.ab_kernel.reshape(2, K, 1, 1).float()
+    
+    def setup_imagenet_ab_kernel(self):
+        self.ab_kernel = torch.tensor(self.hull.T.copy())
+        K = self.ab_kernel.shape[1]
+        self.ab_kernel = self.ab_kernel.reshape(2, K, 1, 1).float()
 
     def load_data(self):
         with open(self.json_file, "r") as f:
@@ -321,8 +383,7 @@ class BaseColorsDataset(Dataset):
 
         if self.ab_transform is not None:
             ab = self.ab_transform(image)
-            ab = self.ab_discretizer(ab)
-            ab = self.reduce_colors(ab)
+            ab, soft_target = self.ab_discretizer(ab)
 
         raw_L = None
         if self.raw_L_transform is not None:
@@ -337,6 +398,7 @@ class BaseColorsDataset(Dataset):
             "caption": caption,
             "caption_len": len(caption),
             "target": ab,
+            "soft_target": soft_target,
             "L": raw_L,
             "rgb": rgb,
             "index" : index,

@@ -165,18 +165,27 @@ class SegmentationExperiment(BaseExperiment):
 class ColorizationExperiment(BaseExperiment):
     def __init__(self, config):
         super().__init__(config)
-        priors = config.get("priors", None)
-        if not config.get("use_priors", False):
-            priors = None
-        if priors is not None:
-            priors = Variable(priors)
-        self.criterion = nn.CrossEntropyLoss(weight=priors, ignore_index=-1)
-        self.lab2rgb = LAB2RGB()
+        self.criterion = None
+        if config.get("use_priors", True):
+            self.priors = config.get("priors", None)
+        else:
+            self.priors = None
+        if self.priors is not None:
+            self.priors = self.priors.to('cuda:0')
         self.loss_fn_alex = lpips.LPIPS(net='alex').to("cuda:0")
+        
+    def loss_fn(self, scores, targets, soft_targets):
+        if soft_targets is None:
+            return F.cross_entropy(scores, targets, self.priors)
+        else:
+            logprobs = F.log_softmax(scores, dim=1)
+            weighted = soft_targets * self.priors.view(1, -1, 1, 1)
+            output = -logprobs * weighted
+            return output.sum() / weighted.sum()
 
     def training_step(self, batch, batch_index):
         scores = self(batch["images"], batch["captions"], batch["captions_l"])
-        loss = self.criterion(scores, batch["targets"])
+        loss = self.loss_fn(scores, batch["targets"], batch["soft_targets"])
         if isnan(loss.item()):
             import ipdb; ipdb.set_trace()
         return {"loss": loss}
@@ -189,7 +198,7 @@ class ColorizationExperiment(BaseExperiment):
         # L, caption, size, ab = batch
         targets = batch["targets"]
         scores = self(batch["images"], batch["captions"], batch["captions_l"])
-        loss = self.criterion(scores, targets)
+        loss = self.loss_fn(scores, targets, batch["soft_targets"])
         top1, top5, num_pixels = compute_pixel_acc(scores, targets)
         num_pixels = targets.numel()
 
