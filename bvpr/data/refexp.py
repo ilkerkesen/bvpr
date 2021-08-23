@@ -199,7 +199,6 @@ class ReferDataset(data.Dataset):
             self.corpus.load_file(vocab_file)
             torch.save(self.corpus, corpus_file)
 
-        return
         if not osp.exists(self.mask_dir):
             os.makedirs(self.mask_dir)
         maxlen = 0

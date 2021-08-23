@@ -7,6 +7,7 @@ import cv2
 import h5py
 import pickle
 import numpy as np
+from torchvision.transforms.transforms import ToTensor
 from tqdm import tqdm
 from skimage import io, color
 import torch
@@ -16,6 +17,7 @@ from torch.utils.data import Dataset
 from torchvision.datasets import CocoCaptions
 from torchvision import transforms as tr
 from torchtext.data import get_tokenizer
+from sklearn.neighbors import NearestNeighbors
 
 from bvpr.data.corpus import Corpus
 from bvpr.util import prior_boosting
@@ -35,7 +37,7 @@ class ColorizationDataset(Dataset):
         self.data_root = osp.abspath(osp.expanduser(data_root))
         self.split = split
         self.year = year
-        self.image_dir = osp.join(self.data_root, f"{self.split}{self.year}") 
+        self.image_dir = osp.join(self.data_root, f"{self.split}{self.year}")
         self.features_dir = features_dir
         if features_dir is not None:
             features_dir = osp.abspath(osp.expanduser(features_dir))
@@ -149,7 +151,8 @@ class ColorizationDataset(Dataset):
 
 class ColorizationReferenceDataset(Dataset):
     def __init__(self, data_root, split="train", max_query_len=20,
-                 transform=None, reduce_colors=False, **kwargs):
+                 transform=None, L_transform=None, ab_transform=None,
+                 reduce_colors=False, **kwargs):
         self.data_root = osp.abspath(osp.expanduser(data_root))
         self.split = split
         self.reduce_colors = reduce_colors
@@ -198,6 +201,231 @@ class ColorizationReferenceDataset(Dataset):
             caption_len,
             target,
         )
+
+
+class BaseColorsDataset(Dataset):
+    def __init__(self, data_root, split="train", max_query_len=20,
+                 transform=None, L_transform=None, ab_transform=None,
+                 raw_L_transform=None, rgb_transform=None, tokenize=True,
+                 prior_set="coco", min_occur=5, gamma=0.5, sigma=5.0, K=1, **kwargs):
+        super().__init__()
+        self.data_root = osp.abspath(osp.expanduser(data_root))
+        self.split = split
+        self.tokenize = tokenize
+        # self.reduce_colors = reduce_colors
+        self.json_file = osp.join(data_root, "dataset.json")
+        self.image_dir = osp.join(data_root, "jpg")
+        self.tokenizer = get_tokenizer("basic_english")
+        self.transform = transform
+        self.L_transform = L_transform
+        self.ab_transform = ab_transform
+        self.raw_L_transform = raw_L_transform
+        self.rgb_transform = rgb_transform
+        self.gamma = gamma
+        self.sigma = sigma
+        self.K = K
+        self.prior_set = prior_set
+        self.load_data()
+        self.corpus = self.load_corpus(min_occur=min_occur)
+        self.load_priors()
+        self.setup_ab_discretizer()
+        self.setup_ab_kernel()
+
+    def load_priors(self):
+        if self.prior_set == "coco":
+            self.load_coco_priors()
+        else:
+            self.load_imagenet_priors()
+
+    def load_coco_priors(self):
+        priors_path = osp.join(self.data_root, "priors-56x56.npy")
+        self.raw_priors = torch.from_numpy(
+            prior_boosting(priors_path, 1.0, self.gamma)).float()
+        self.raw_priors = self.raw_priors.flatten()
+        num_points = self.raw_priors.numel()
+        self.ab_mask = self.raw_priors > 0
+        self.color2index = -torch.ones(num_points).long()
+        self.color2index[self.ab_mask] = torch.arange(self.ab_mask.sum())
+        self.index2color = torch.arange(num_points)[self.ab_mask]
+        self.priors = self.raw_priors[self.raw_priors > 0]
+        self.num_colors = self.priors.numel()
+
+    def load_imagenet_priors(self):
+        priors_path = osp.join(self.data_root, "imagenet-priors.npy")
+        self.priors = torch.from_numpy(
+            prior_boosting(priors_path, 1.0, self.gamma)).float()
+        self.num_colors = self.priors.numel()
+
+    def setup_ab_discretizer(self):
+        if self.prior_set == "coco":
+            self.ab_discretizer = tr.Compose([
+                tr.ToTensor(),
+                ABColorDiscretizer(),
+                tr.Lambda(lambda ab: self.color2index[ab]),
+                tr.Lambda(lambda ab: (ab, None)),
+            ])
+        elif self.prior_set == "imagenet":
+            self.hull = np.load(osp.join(self.data_root, "color-grid.npy"))
+            self.nbrs = NearestNeighbors(
+                n_neighbors=self.K,
+                algorithm='ball_tree')
+            self.nbrs.fit(self.hull)
+            self.ab_discretizer = self.imagenet_discretizer
+            self.p_inds = None
+            self.to_tensor = tr.ToTensor()
+
+    def imagenet_discretizer(self, ab):
+        H, W, _ = ab.shape
+        if self.p_inds is None:
+            self.p_inds = np.arange(0, H*W, dtype='int')[:, np.newaxis]
+        ab = ab.reshape(-1, 2)
+        dists, inds = self.nbrs.kneighbors(ab)
+        hard_targets = torch.tensor(inds[:, 0].reshape(H, W))
+        soft_targets = None
+        if self.K > 1:
+            soft_targets = np.zeros((H*W, self.num_colors))
+            wts = np.exp(-dists**2/(2*self.sigma**2))
+            wts = wts/np.sum(wts,axis=1)[:, np.newaxis]
+            soft_targets[self.p_inds, inds] = wts
+            soft_targets = soft_targets.reshape(H, W, self.num_colors)
+            soft_targets = self.to_tensor(soft_targets)
+        return hard_targets, soft_targets
+
+    def setup_ab_kernel(self):
+        if self.prior_set == "coco":
+            self.setup_coco_ab_kernel()
+        elif self.prior_set == "imagenet":
+            self.setup_imagenet_ab_kernel()
+
+    def setup_coco_ab_kernel(self):
+        a = torch.unsqueeze(torch.arange(625) // 25, 0)
+        b = torch.unsqueeze(torch.arange(625) % 25, 0)
+        self.ab_kernel = 10 * torch.cat([a, b], dim=0) - 120
+        self.ab_kernel = self.ab_kernel.float()
+        self.ab_kernel = self.ab_kernel[:, self.ab_mask]
+        K = self.ab_kernel.shape[1]
+        self.ab_kernel = self.ab_kernel.reshape(2, K, 1, 1).float()
+    
+    def setup_imagenet_ab_kernel(self):
+        self.ab_kernel = torch.tensor(self.hull.T.copy())
+        K = self.ab_kernel.shape[1]
+        self.ab_kernel = self.ab_kernel.reshape(2, K, 1, 1).float()
+
+    def load_data(self):
+        with open(self.json_file, "r") as f:
+            self.json_data = json.load(f)
+        self.captions = [x for x in self.json_data if x["split"] == self.split]
+
+    def load_corpus(self, min_occur):
+        corpus_file = osp.join(self.data_root, f"corpus-{min_occur}.pth")
+        if osp.isfile(corpus_file):
+            return torch.load(corpus_file)
+
+        train_sentences = [
+            x["caption"]
+            for x in self.json_data
+            if x["split"] == "train"
+        ]
+
+        count_dict = dict()
+        for sentence in train_sentences:
+            tokens = self.tokenizer(sentence.lower())
+            for token in tokens:
+                count_dict[token] = 1 + count_dict.get(token, 0)
+
+        corpus = Corpus()
+        corpus.dictionary.add_word(PAD_TOKEN)
+        corpus.dictionary.add_word(UNK_TOKEN)
+        corpus.dictionary.add_word(SOS_TOKEN)
+
+        words = sorted([
+            (word, count)
+            for (word, count) in count_dict.items()
+            if count >= min_occur
+        ], key=lambda x: x[1])
+        words = [word for (word, _) in words]
+        for word in words:
+            corpus.dictionary.add_word(word)
+
+        torch.save(corpus, corpus_file)
+        return corpus
+
+    def read_rgb_image(self, image_filename):
+        image_path = osp.join(self.image_dir, image_filename)
+        image = io.imread(image_path)
+        if len(image.shape) == 2:
+            image = np.stack([image] * 3, axis=-1)
+        return image
+
+    def tokenize_caption(self, caption):
+        tokens = [SOS_TOKEN] + self.tokenizer(caption)
+        w2i = self.corpus.dictionary.word2idx
+        tokens = [w2i.get(t, w2i[UNK_TOKEN]) for t in tokens]
+        return torch.tensor(tokens)
+
+    def __len__(self):
+        return len(self.captions)
+
+    def __getitem__(self, index):
+        item = self.captions[index]
+        caption = item["caption"]
+        if self.tokenize:
+            caption = self.tokenize_caption(caption)
+
+        image_filename = item["image_file"]
+        image = self.read_rgb_image(image_filename)
+        if self.transform is not None:
+            image = self.transform(image)
+
+        L = ab = image
+        if self.L_transform is not None:
+            L = self.L_transform(image)
+
+        if self.ab_transform is not None:
+            ab = self.ab_transform(image)
+            ab, soft_target = self.ab_discretizer(ab)
+
+        raw_L = None
+        if self.raw_L_transform is not None:
+            raw_L = self.raw_L_transform(image)
+
+        rgb = None
+        if self.rgb_transform is not None:
+            rgb = self.rgb_transform(image)
+
+        return {
+            "input_image": L,
+            "caption": caption,
+            "caption_len": len(caption),
+            "target": ab,
+            "soft_target": soft_target,
+            "L": raw_L,
+            "rgb": rgb,
+            "index" : index,
+        }
+
+
+class FlowersDataset(BaseColorsDataset):
+    pass
+
+
+class ColorsDataset(BaseColorsDataset):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.embeddings = pickle.load(
+            open(osp.join(self.data_root, "w2v_embeddings_colors.p"), "rb"),
+            encoding="iso-8859-1")
+        self.embeddings = torch.tensor(self.embeddings, dtype=torch.float)
+
+    def load_corpus(self, min_occur):
+        corpus_file = osp.join(self.data_root, "corpus-0.pth")
+        return torch.load(corpus_file)
+
+
+class COCODataset(BaseColorsDataset):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.image_dir = osp.join(self.data_root, "images", self.split)
 
 
 class LookupEncode(object):

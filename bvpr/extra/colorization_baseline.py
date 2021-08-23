@@ -5,7 +5,8 @@ from torch.nn.utils.rnn import pad_packed_sequence as unpack
 from torch.nn.utils.rnn import pack_padded_sequence as pack
 from torch.nn.init import kaiming_normal, kaiming_uniform
 
-from bvpr.submodules import get_glove_vectors, CaptionEncoder
+from bvpr.submodules import get_glove_vectors, CaptionEncoder, LSTMEncoder
+from bvpr.util import inf_clamp
 
 
 def init_modules(modules, init='uniform'):
@@ -66,7 +67,8 @@ class FilMedResBlock(nn.Module):
 class AutocolorizeResnet(nn.Module):
     def __init__(self, vocab_size, feature_dim=(512, 28, 28), d_hid=256,
                  d_emb=300, num_modules=4, num_classes=625, glove=True,
-                 vectors=None, **kwargs):
+                 vectors=None, corpus=None, text_encoder="CaptionEncoder",
+                 bidirectional=True, dropout=0.0, **kwargs):
         super().__init__()
         self.num_modules = num_modules
         self.n_lstm_hidden = d_hid
@@ -74,15 +76,29 @@ class AutocolorizeResnet(nn.Module):
         self.in_dim = feature_dim[0]
         self.num_classes = num_classes
         dilations = [1, 1, 1, 1]
-        cfg = {
-            "vectors": vectors,
-            "num_embedding": vocab_size,
-            "embedding_dim": d_emb,
-            "hidden_size": d_hid,
-            "w2v": True,
-            "bidirectional": True,
-        } 
-        self.caption_encoder = CaptionEncoder(cfg)
+
+        if text_encoder == "CaptionEncoder":
+            cfg = {
+                "vectors": vectors,
+                "num_embedding": vocab_size,
+                "embedding_dim": d_emb,
+                "hidden_size": d_hid,
+                "w2v": True,
+                "bidirectional": True,
+            } 
+            self.caption_encoder = CaptionEncoder(cfg)
+        elif text_encoder == "LSTMEncoder":
+            cfg = {
+                "name": "LSTMEncoder",
+                "glove": glove,
+                "bidirectional": bidirectional,
+                "embedding_dim": d_emb,
+                "hidden_size": d_hid,
+                "dropout": dropout,
+                "batch_first": True,
+                "corpus": corpus,
+            }
+            self.caption_encoder = LSTMEncoder(cfg)
 
         # self.function_modules = {}
         # for fn_num in range(self.num_modules):
@@ -112,6 +128,7 @@ class AutocolorizeResnet(nn.Module):
         caption_features = caption_features.transpose(0, 1).reshape(B, -1)
         # out = F.relu(self.bn1(self.conv1(x)))
 
+        # import ipdb; ipdb.set_trace()
         dense_film_1 = self.dense_film_1(caption_features)
         dense_film_2 = self.dense_film_2(caption_features)
         dense_film_3 = self.dense_film_3(caption_features)
@@ -123,10 +140,16 @@ class AutocolorizeResnet(nn.Module):
         gammas4, betas4 = torch.split(dense_film_4, self.in_dim, dim=-1)
 
         out = self.mod1(x, gammas1, betas1)  # out is 2x512x28x28
+        out = inf_clamp(out)
         out = self.mod2(out, gammas2, betas2)  # out is 2x512x28x28
+        out = inf_clamp(out)
         out = self.mod3(out, gammas3, betas3)
+        out = inf_clamp(out)
         out_last = self.mod4(out, gammas4, betas4)
+        out_last = inf_clamp(out_last)
 
         out = self.upsample(out_last)
+        out = inf_clamp(out)
         out = self.classifier(out)
+        out = inf_clamp(out)
         return out_last, out

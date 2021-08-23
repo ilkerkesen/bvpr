@@ -109,7 +109,11 @@ class ColorizationModel(nn.Module):
         self.config = config
         self.text_encoder = self.setup_submodule(config, "text_encoder")
         # num_channels = self.image_encoder.num_channels
-        num_channels = 512
+        self.image_encoder = ImageEncoder(
+            config["image_encoder"],
+            config["use_location_embeddings"],
+        )
+        num_channels = self.image_encoder.num_channels
         hidden_size = self.text_encoder.config["hidden_size"]
         self.multimodal_encoder = MultimodalEncoder(
             config["multimodal_encoder"],
@@ -118,14 +122,18 @@ class ColorizationModel(nn.Module):
         self.mask_predictor = SegmentationHead(
             self.config["multimodal_encoder"]["num_kernels"],
             self.config["mask_predictor"]["num_classes"],
-            upsampling=2)
+            upsampling=2**(self.image_encoder.num_downsample-2))
 
     def setup_submodule(self, model_config, submodule, **kwargs):
         config = model_config[submodule]
         submodule_class = eval(config["name"], **kwargs)
         return submodule_class(config)
 
-    def forward(self, features, caption, caption_l):
+    def forward(self, visual_input, caption, caption_l):
+        _, C, _, _ = visual_input.size()
+        features = visual_input
+        if C == 3:
+            features = self.image_encoder(visual_input)
         txt = self.text_encoder(caption, caption_l)
         joint = self.multimodal_encoder(features, txt)
         outputs = self.mask_predictor(joint)
@@ -140,9 +148,12 @@ class ColorizationBaseline(nn.Module):
             config["image_encoder"],
             config["use_location_embeddings"],
         )
-        self.network = AutocolorizeResnet(vectors=config["vectors"], **config["network"])
-        del config["vectors"]
+        vectors = config.get("vectors")
+        self.network = AutocolorizeResnet(vectors=vectors, **config["network"])
+        if vectors is not None:
+            del config["vectors"]
 
-    def forward(self, features, caption, caption_l):
+    def forward(self, image, caption, caption_l):
+        features = self.image_encoder(image)
         output = self.network(features, caption, caption_l)
         return output[-1]

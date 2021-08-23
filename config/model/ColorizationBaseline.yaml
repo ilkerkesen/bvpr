@@ -13,3 +13,6 @@ network:
   num_classes: 261
   d_hid: 256
   d_emb: 300
+  text_encoder: LSTMEncoder
+  bidirectional: true
+  dropout: 0.2

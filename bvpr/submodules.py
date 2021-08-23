@@ -13,6 +13,7 @@ import clip
 
 from bvpr.util import add_batch_location_embeddings
 from bvpr.util import MOBILENET_SIZE_MAP
+from bvpr.util import inf_clamp
 from bvpr.extra import deeplab
 
 
@@ -28,6 +29,13 @@ __all__ = (
     "SegmentationHead",
     "CaptionEncoder",
 )
+
+
+class HalfConv2d(nn.Conv2d):
+    def forward(self, x):
+        x = super().forward(x)
+        x = inf_clamp(x)
+        return x
 
 
 def get_glove_cache():
@@ -62,7 +70,7 @@ class CBR(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, padding):
         super(CBR, self).__init__()
         self.conv = nn.Sequential(
-            nn.Conv2d(
+            HalfConv2d(
                 in_channels,
                 out_channels,
                 kernel_size,
@@ -96,7 +104,7 @@ class CBRTranspose(nn.Module):
         if self.pdrop > 0:
             x = self.dropout(x)
         x = self.deconv(x, output_size=output_size)
-        x = self.bnorm(x)
+        x = self.bnorm(inf_clamp(x))
         x = self.act(x)
         return x
 
@@ -171,7 +179,7 @@ class BatchConv2DKernelFromText(nn.Module):
     def forward(self, feature_map, text_embedding, return_kernel=False):
         B, C, H, W = feature_map.size()
         weight = self.dropout(text_embedding)
-        weight = self.dense(weight)
+        weight = inf_clamp(self.dense(weight))
         weight = weight.view(B, C, C, self.kernel_size, self.kernel_size)
         weight = F.normalize(weight)
         if return_kernel:
@@ -191,11 +199,21 @@ class LSTMEncoder(nn.Module):
                 num_embeddings=config["num_embeddings"],
                 embedding_dim=config["embedding_dim"],
                 padding_idx=0)
-        self.lstm = nn.LSTM(config["embedding_dim"], config["hidden_size"])
+        self.lstm = nn.LSTM(
+            config["embedding_dim"],
+            config["hidden_size"],
+            bidirectional=config.get("bidirectional", False),
+            batch_first=config.get("batch_first", False),
+        )
         self.config = config
 
-    def forward(self, x):
-        return self.lstm(self.embedding(x))
+    def forward(self, x, x_l=None):
+        embed = self.embedding(x)
+        embed = inf_clamp(embed)
+        if x_l is not None:
+            batch_first = self.config.get("batch_first", False)
+            embed = pack_padded_sequence(embed, x_l, batch_first=batch_first)
+        return self.lstm(embed)
 
 
 class CaptionEncoder(nn.Module):
@@ -407,7 +425,7 @@ class MultimodalEncoder(nn.Module):
         self.top_down = TopDownEncoder(self.config)
 
     def forward(self, visual, textual):
-        hidden = textual[1][0]
+        hidden = inf_clamp(textual[1][0])
         L, B, T = hidden.size()
         hidden = hidden.transpose(0, 1).reshape(B, -1)
         hidden_size = self.config["text_embedding_dim"] // self.config["num_layers"]
@@ -467,8 +485,8 @@ class BottomUpEncoder(nn.Module):
             num_channels = in_channels if i == 0 else num_kernels
             self.conditional_layers.append(
                 layer_func(
-                   num_channels, # in_channels/in_features
-                   num_channels, # out_channels/out_features
+                   num_channels,  # in_channels/in_features
+                   num_channels,  # out_channels/out_features
                    text_dim,
                    kernel_size=config["text_kernel_size"],
                    stride=1,  # FIXME
@@ -498,11 +516,14 @@ class BottomUpEncoder(nn.Module):
     def forward(self, vis, txt):
         packed = zip(txt, self.layers, self.conditional_layers)
         num_layers = len(self.layers)
+        vis = inf_clamp(vis)
         outputs, visual_branch = [vis], [vis]
         for i, (embedding, layer, conditional_layer) in enumerate(packed):
             previous = outputs[-1]
             feature_map = conditional_layer(previous, embedding)
+            feature_map = inf_clamp(feature_map)
             feature_map = layer(torch.cat([previous, feature_map], dim=1))
+            feature_map = inf_clamp(feature_map)
             outputs.append(feature_map)
 
             # to prevent leakage in case of only bottom-up processing
@@ -511,6 +532,7 @@ class BottomUpEncoder(nn.Module):
             if not self.config["topdown"] and self.config["bottomup"]:
                 visual_layer = self.visual_layers[i]
                 visual_feature_map = visual_layer(visual_branch[-1])
+                visual_feature_map = inf_clamp(visual_feature_map)
                 visual_branch.append(visual_feature_map)
 
         if not self.config["topdown"] and self.config["bottomup"]:
@@ -577,10 +599,12 @@ class TopDownEncoder(nn.Module):
             output_size = bottom_up_outputs[j-1].size()
             B, C, H, W = bottomup_output.size()
             feature_map = conditional_layer(bottomup_output, embedding)
+            feature_map = inf_clamp(feature_map)
             input = feature_map
             if i != 0:
                 input = torch.cat([output, feature_map], dim=1)
             output = layer(input, output_size=output_size)
+            output = inf_clamp(output)
             top_down_outputs.append(output)
         return top_down_outputs
 
@@ -631,12 +655,18 @@ class Activation(nn.Module):
         return self.activation(x)
 
 
+class InfClamp(nn.Module):
+    def forward(self, x):
+        return inf_clamp(x)
+
+
 class SegmentationHead(nn.Sequential):
     def __init__(self, in_channels, out_channels, kernel_size=3, activation=None, upsampling=1):
         conv2d = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, padding=kernel_size // 2)
+        clamp = InfClamp()
         upsampling = nn.UpsamplingBilinear2d(scale_factor=upsampling) if upsampling > 1 else nn.Identity()
         activation = Activation(activation)
-        super().__init__(conv2d, upsampling, activation)
+        super().__init__(conv2d, clamp, upsampling, activation)
 
     def forward(self, *args, image_size=None, **kwargs):
         return super().forward(*args, **kwargs)

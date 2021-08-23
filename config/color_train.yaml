@@ -14,7 +14,7 @@ criterion: "MaskedMultiScaleBCELoss"
 
 # data loader
 loader:
-  batch_size: 24
+  batch_size: 32
   pin_memory: false
   num_workers: 5
 
@@ -26,10 +26,10 @@ logger:
 
 # checkpoint
 checkpoint:
-  save_top_k: 1
+  save_top_k: -1
   save_last: true
   verbose: true
-  monitor: "val_top1_acc"
+  monitor: "val_top5_acc"
   mode: "max"
 
 # resume training

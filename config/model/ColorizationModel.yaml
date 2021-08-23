@@ -1,15 +1,16 @@
 # @package _group_
 architecture: ColorizationModel
 multiscale: false
-use_location_embeddings: true
+use_location_embeddings: false
 text_encoder:
-  name: CaptionEncoder
+  name: LSTMEncoder
   hidden_size: 256
-  bidirectional: false
+  bidirectional: true
   embedding_dim: 300
   glove: true
   w2v: true
   dropout: 0.2
+  batch_first: true
 image_encoder:
   name: resnet101
   num_layers: 2
@@ -27,7 +28,7 @@ multimodal_encoder:
   text_kernel_size: 1  
   layer: "conv"  # or film
 mask_predictor:
-  num_channels: 128
+  num_channels: 512
   kernel_size: 5
   stride: 2
   padding: 2

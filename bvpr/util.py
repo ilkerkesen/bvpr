@@ -48,14 +48,19 @@ def process_config(cfg, dataset, task="segmentation"):
     elif encoder == "mobilenetv2":
         predictor_num_layers = MOBILENET_SIZE_MAP[encoder_num_layers-1][1]
 
+    model = cfg["architecture"]
+    text_encoder = "LSTMEncoder"
     if task == "segmentation":
         cfg["text_encoder"]["corpus"] = dataset.corpus
         cfg["mask_predictor"]["num_layers"] = predictor_num_layers
-    elif cfg["architecture"] == "ColorizationModel":
+    elif model == "ColorizationModel" and text_encoder == "CaptionEncoder":
         cfg["mask_predictor"]["num_layers"] = predictor_num_layers
         cfg["text_encoder"]["vectors"] = dataset.embeddings
-    elif cfg["architecture"] == "ColorizationBaseline":
-        cfg["vectors"] = dataset.embeddings
+    elif model == "ColorizationModel" and text_encoder == "LSTMEncoder":
+        cfg["mask_predictor"]["num_layers"] = predictor_num_layers
+        cfg["text_encoder"]["corpus"] = dataset.corpus
+    elif model == "ColorizationBaseline":
+        cfg["network"]["corpus"] = dataset.corpus
 
     return cfg
 
@@ -191,5 +196,30 @@ def prior_boosting(prior_file, alpha, gamma):
 
 def annealed_mean(z, T=1.0, dim=1):
     num = torch.exp(torch.log(z) / T)
-    den = torch.sum(num, dim=1)
+    den = torch.sum(num, dim=1, keepdim=True)
     return num / den
+
+
+def scores2rgb(scores, L, ab_mask):
+    B, C, H, W = probs.size()
+    probs = probs.transpose(0, 1).unsqueeze(0)
+    probs = probs.reshape(1, C, -1)
+    ab_pred = torch.bmm(self.ab, probs)
+    ab_pred = ab_pred.reshape(2, B, H, W)
+    ab_pred = ab_pred.transpose(0, 1)
+    predicted = torch.cat([batch["Ls"], ab_pred], dim=1)
+    predicted = predicted.permute(0, 2, 3, 1).cpu().numpy()
+    predicted = torch.tensor(color.lab2rgb(predicted), device=rgbs.device)
+    predicted = torch.round(predicted.permute(0, -1, 1, 2) * 255)
+    return predicted
+
+
+def pretty_acc(val):
+    return round(100 * val, 2)
+
+
+def inf_clamp(tensor):
+    if torch.isinf(tensor).any():
+        clamp_value = torch.finfo(tensor.dtype).max - 1000
+        tensor = torch.clamp(tensor, min=-clamp_value, max=clamp_value)
+    return tensor

@@ -1,9 +1,11 @@
+from bvpr.util import annealed_mean
 from collections import Iterable
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
+from skimage import color
 
 
 class DownsizeImage(object):
@@ -47,12 +49,37 @@ class PadBottomRight(object):
 
 
 class ABColorDiscretizer(object):
+    def __init__(self, min_val=-120):
+        super().__init__()
+        self.min_val = min_val
+
     def __call__(self, image):
         bin_size = 10
-        min_val = -128
+        min_val = self.min_val
         grid_dim = 25
 
-        quantized = torch.round(image / bin_size)
-        quantized = quantized - (min_val / bin_size)
+        quantized = torch.round((image - min_val) / bin_size)
         discrete = quantized[0, :, :] * grid_dim + quantized[1, :, :]
         return discrete.long()
+
+
+class LAB2RGB(object):
+    def __init__(self, ab_kernel=None, device="cuda:0", mode="eval"):
+        self.device = torch.device(device)
+        self.ab_kernel = ab_kernel.to(self.device)
+        self.mode = mode
+        assert mode in ("eval", "demo")
+
+    def __call__(self, L, scores, T=1.0):
+        probs = F.softmax(scores, dim=1)
+        probs = annealed_mean(probs, T=T) 
+        ab_pred = F.conv2d(probs, self.ab_kernel)
+        predicted = torch.cat([L, ab_pred], dim=1)
+        predicted = predicted.permute(0, 2, 3, 1).cpu().numpy()
+        predicted = color.lab2rgb(predicted)
+        if self.mode == "eval":
+            predicted = torch.tensor(predicted, device=self.device)
+            predicted = predicted.permute(0, -1, 1, 2)
+        elif self.mode == "demo":
+            predicted = predicted.squeeze(0)
+        return predicted

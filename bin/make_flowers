@@ -1,0 +1,58 @@
+#!/usr/bin/env python
+
+import os
+import os.path as osp
+import json
+import click
+
+
+@click.command()
+@click.option("--path", required=True, type=click.Path(exists=True))
+@click.option("--output-file", required=True)
+def main(path, output_file):
+    path = osp.abspath(osp.expanduser(path))
+    with open(osp.join(path, "trainvalclasses.txt"), "r") as f: 
+        train_classes = [line.strip() for line in f.readlines()]
+    with open(osp.join(path, "testclasses.txt"), "r") as f:
+        test_classes = [line.strip() for line in f.readlines()]
+    subdirs = [
+        item
+        for item in os.listdir(osp.join(path, "text_c10"))
+        if not item.endswith(".t7")
+    ]
+    subdirs = sorted(subdirs)
+    records = list()
+
+    i = 0
+    for subdir in subdirs:
+        split = None
+        if subdir in train_classes:
+            split = "train"
+        elif subdir in test_classes:
+            split = "test"
+        dirpath = osp.join(path, "text_c10", subdir)
+        files = [item for item in os.listdir(dirpath) if item.endswith(".txt")]
+        for filename in files:
+            filepath = osp.join(dirpath, filename)
+            with open(filepath, "r") as f:
+                captions = [line.strip() for line in f.readlines()]
+            image_file = osp.splitext(filename)[0]
+            image_id = int(image_file.split("_")[-1])
+            for j, caption in enumerate(captions):
+                record = {
+                    "image_file": image_file + ".jpg",
+                    "image_id": image_id,
+                    "example_id": i,
+                    "caption_id": j,
+                    "caption": caption,
+                    "split": split,
+                    "class": subdir,
+                }
+                records.append(record)
+                i += 1
+
+    with open(output_file, "w") as f:
+        json.dump(records, f, indent=4)
+
+if __name__ == "__main__":
+    main()

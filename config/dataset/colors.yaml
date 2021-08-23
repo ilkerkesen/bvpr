@@ -1,6 +1,6 @@
 # @package _group_
 dataset: "colors"
-data_root: "/userfiles/ikesen16/data/colorization"
-min_occur: 5
-features_dir: "~/data/coco/lab/resnet101-2-layers"
+data_root: "/userfiles/ikesen16/data/colors_fixed"
+min_occur: 0
 reduce_colors: true
+gamma: 0.5

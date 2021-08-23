@@ -1,0 +1,23 @@
+seed: 1
+image_size: 224
+checkpoint: null
+output: null
+
+defaults:
+  - dataset: coco
+  - optimizer: Adam
+  - trainer: color
+  - hydra/job_logging: disabled
+
+criterion: "MaskedMultiScaleBCELoss"
+
+# data loader
+loader:
+  batch_size: 24
+  pin_memory: false
+  num_workers: 5
+
+# hydra-specific
+hydra:
+  run:
+    dir: .
