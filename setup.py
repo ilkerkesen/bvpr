@@ -9,5 +9,6 @@ setup(
     author_email='ilkerksn@gmail.com',
     license='MIT',
     packages=['bvpr'],
-    zip_safe=False
+    zip_safe=False,
+    include_package_data=True,
 )

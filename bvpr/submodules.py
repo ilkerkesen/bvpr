@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence
 from torchvision.models import resnet18, resnet50, resnet101
 from torchtext.vocab import GloVe
-import clip
+# import clip
 
 from bvpr.util import add_batch_location_embeddings
 from bvpr.util import MOBILENET_SIZE_MAP
