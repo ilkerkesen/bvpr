@@ -423,7 +423,7 @@ class ColorizationDemo(object):
         self.model.load_state_dict(state_dict)
         self.model.eval()
         self.lab2rgb = LAB2RGB(
-            ab_mask=self.data_module.train_data.ab_mask,
+            ab_kernel=self.data_module.train_data.ab_kernel,
             device=device,
             mode="demo",
         )
