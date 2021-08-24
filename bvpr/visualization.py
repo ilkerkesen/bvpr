@@ -383,13 +383,15 @@ class WordRemovalActivationDemo(SegmentationDemo):
 
 
 class ColorizationDemo(object):
-    def __init__(self, checkpoint_path, dataset, data_path, device="cuda:0"):
+    def __init__(self, checkpoint_path, dataset, data_path, device="cuda:0", K=1, prior_set="imagenet"):
         data_config = {
             "image_size": 224,
 
             "dataset": {
                 "dataset": dataset,
                 "data_root": data_path,
+                "K": K,
+                "prior_set": prior_set,
             },
 
             # just in case
