@@ -416,9 +416,12 @@ class ColorizationDemo(object):
         state_dict = {".".join(k.split(".")[1:]): v for (k, v) in state_dict if k.startswith("model")}
         model_config = ckpt["hyper_parameters"]["model"]
         # model_config["text_encoder"]["vectors"] = self.data_module.train_data.embeddings
-        Model = ColorizationModel
         if model_config["architecture"] == "ColorizationBaseline":
             Model = ColorizationBaseline
+            model_config["network"]["glove"] = False
+        else:
+            Model = ColorizationModel
+            model_config["text_encoder"]["glove"] = False
         self.model = Model(model_config).to(device)
         self.model.load_state_dict(state_dict)
         self.model.eval()

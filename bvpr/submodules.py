@@ -196,7 +196,7 @@ class LSTMEncoder(nn.Module):
             self.embedding = nn.Embedding.from_pretrained(vectors)
         else:
             self.embedding = nn.Embedding(
-                num_embeddings=config["num_embeddings"],
+                num_embeddings=len(config["corpus"].dictionary.word2idx),
                 embedding_dim=config["embedding_dim"],
                 padding_idx=0)
         self.lstm = nn.LSTM(
