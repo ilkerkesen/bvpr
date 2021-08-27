@@ -12,6 +12,7 @@ import torch.optim as optim
 from torch.autograd import Variable
 from pytorch_lightning import LightningModule
 from torchvision.utils import make_grid
+from torchvision.transforms.functional import to_pil_image
 import lpips
 
 from bvpr.models import *
@@ -306,14 +307,27 @@ class ColorizationExperiment(BaseExperiment):
         pred = torch.round(255 * self.lab2rgb(batch["Ls"], scores))
         mse = torch.mean(torch.abs(pred - rgbs)**2, dim=(1,2,3))
         psnr_vals = 10*torch.log10(255**2 / (mse + 1e-7))
-
         rgbs = rgbs / (255. / 2.) - 1.
         pred = pred / (255. / 2.) - 1.
         lpips_vals = self.loss_fn_alex(pred, rgbs).flatten()
+        
+        output_dir = osp.abspath(osp.expanduser(self.config["output"]))
+        image_dir = osp.join(output_dir, "jpg")
+        if not osp.isdir(image_dir):
+          os.makedirs(image_dir)
+        
         output = []
+        test_data = self.test_dataloader().dataset
         for i in range(B):
+            index = batch["indexes"][i]
+            caption = test_data.captions[index]["caption"]
+            image = to_pil_image(pred[i] + 1.)
+            image_path = osp.join(image_dir, f"val_{index:05d}.jpg")
+            image.save(image_path)
+
             output.append((
-                batch["indexes"][i],
+                index,
+                caption,
                 pretty_acc(top1[i].item()),
                 pretty_acc(top5[i].item()),
                 round(psnr_vals[i].item(), 2),
@@ -323,9 +337,10 @@ class ColorizationExperiment(BaseExperiment):
         return output
 
     def test_epoch_end(self, outputs):
-        output_file = osp.abspath(osp.expanduser(self.config["output"]))
+        output_dir = osp.abspath(osp.expanduser(self.config["output"]))
+        output_file = osp.join(output_dir, "results.csv")
         with open(output_file, "w") as f:
-            f.write("idx,top1,top5,psnr,lpips\n")
+            f.write("idx,caption,top1,top5,psnr,lpips\n")
             for batch_output in outputs:
                 batch_output = sorted(batch_output, key=lambda x: x[0])
                 for output in batch_output:

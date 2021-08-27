@@ -40,17 +40,18 @@ def main(config):
 
     # data
     train_data = Dataset(split="train", **config["dataset"])
-    if train_data.reduce_colors:
-        config["priors"] = train_data.priors
-    else:
-        config["priors"] = train_data.raw_priors
+    config["priors"] = train_data.priors
 
     config["checkpoint"] = osp.abspath(osp.expanduser(config["checkpoint"]))
     # config["trainer"]["resume_from_checkpoint"] = config["checkpoint"]
     config["trainer"]["max_epochs"] = 5000  # FIXME
     ckpt = torch.load(config["checkpoint"])
     config["model"] = ckpt["hyper_parameters"]["model"]
-    config["model"] = process_config(config["model"], train_data)
+    config["model"] = process_config(config["model"], train_data, "colorization")
+    if config["model"].get("text_encoder") is not None:
+      config["model"]["text_encoder"]["glove"] = False
+    elif config["model"].get("network") is not None:
+      config["model"]["network"]["glove"] = False
 
     experiment, datamodule = Experiment(config), DataModule(config)
     state_dict = torch.load(config["checkpoint"])["state_dict"]
@@ -61,11 +62,11 @@ def main(config):
     }
     experiment.model.load_state_dict(state_dict)  # FIXME
     datamodule.setup()
-    experiment.lab2rgb = LAB2RGB(ab_mask=train_data.ab_mask)
+    experiment.lab2rgb = LAB2RGB(ab_kernel=train_data.ab_kernel)
     trainer = pl.Trainer(
         logger=None,
         callbacks=None,
-        **config["trainer"],
+        **config["trainer"]["trainer"],
     )
     trainer.test(experiment, datamodule=datamodule)
 
