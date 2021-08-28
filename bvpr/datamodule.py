@@ -243,6 +243,8 @@ class ColorizationDataModule(pl.LightningDataModule):
         self.rgb_transform = ts.Resize(image_dim // 4)
         self.demo_raw_L_transform = make_raw_L_transform(image_dim)
         self.demo_rgb_transform = ts.Resize(image_dim)
+        self.test_raw_L_transform = make_raw_L_transform(image_dim)
+        self.test_rgb_transform = ts.Resize(image_dim)
 
         self.dataset_class = ColorsDataset
         self.val_split = self.test_split = "val"
@@ -280,8 +282,8 @@ class ColorizationDataModule(pl.LightningDataModule):
                 transform=self.val_transform,
                 L_transform=self.L_transform,
                 ab_transform=self.ab_transform,
-                raw_L_transform=self.raw_L_transform,
-                rgb_transform=self.rgb_transform,
+                raw_L_transform=self.test_raw_L_transform,
+                rgb_transform=self.test_rgb_transform,
                 **self.config["dataset"]
             )
 

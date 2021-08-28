@@ -13,6 +13,7 @@ from torch.autograd import Variable
 from pytorch_lightning import LightningModule
 from torchvision.utils import make_grid
 from torchvision.transforms.functional import to_pil_image
+from skimage import io
 import lpips
 
 from bvpr.models import *
@@ -302,14 +303,15 @@ class ColorizationExperiment(BaseExperiment):
         topk_pred = topk_pred.reshape(B, K, H*W)
         top1 = topk_pred[:, 0, :].half().mean(dim=1)
         top5 = topk_pred.half().sum(dim=1).mean(dim=1)
+        upsampled = F.interpolate(scores, scale_factor=4, mode="bilinear")
 
         rgbs = torch.round(255 * batch["rgbs"])
-        pred = torch.round(255 * self.lab2rgb(batch["Ls"], scores))
+        pred = torch.round(255 * self.lab2rgb(batch["Ls"], upsampled))
         mse = torch.mean(torch.abs(pred - rgbs)**2, dim=(1,2,3))
         psnr_vals = 10*torch.log10(255**2 / (mse + 1e-7))
         rgbs = rgbs / (255. / 2.) - 1.
-        pred = pred / (255. / 2.) - 1.
-        lpips_vals = self.loss_fn_alex(pred, rgbs).flatten()
+        pred_norm = pred / (255. / 2.) - 1.
+        lpips_vals = self.loss_fn_alex(pred_norm, rgbs).flatten()
         
         output_dir = osp.abspath(osp.expanduser(self.config["output"]))
         image_dir = osp.join(output_dir, "jpg")
@@ -321,9 +323,10 @@ class ColorizationExperiment(BaseExperiment):
         for i in range(B):
             index = batch["indexes"][i]
             caption = test_data.captions[index]["caption"]
-            image = to_pil_image(pred[i] + 1.)
+            image = pred[i].cpu().permute(1,2,0).numpy()
+            image = image.astype(np.uint8)
             image_path = osp.join(image_dir, f"val_{index:05d}.jpg")
-            image.save(image_path)
+            io.imsave(image_path, image)
 
             output.append((
                 index,
