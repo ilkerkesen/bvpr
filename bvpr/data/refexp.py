@@ -9,6 +9,7 @@ https://github.com/chenxi116/TF-phrasecut-public/blob/master/build_batches.py
 """
 
 import os
+import cv2
 from skimage import io
 from skimage.transform import resize
 import json
@@ -20,9 +21,9 @@ import scipy.io as sio
 from referit import REFER
 import torch.utils.data as data
 from referit.refer import mask as cocomask
-from bvpr.data.corpus import Corpus
+from transformers import AutoTokenizer
 
-import cv2
+from bvpr.data.corpus import Corpus
 
 
 class DatasetNotFoundError(Exception):
@@ -53,7 +54,7 @@ class ReferDataset(data.Dataset):
     def __init__(self, data_root, split_root=None, dataset='referit',
                  transform=None, mask_transform=None,
                  split='train', max_query_len=-1, bertencoding=False,
-                 bert=False, corpus_file=None, features_path=None):
+                 use_bert=False, corpus_file=None, features_path=None):
         self.images = []
         self.data_root = osp.expanduser(data_root)
         self.split_root = split_root
@@ -67,7 +68,7 @@ class ReferDataset(data.Dataset):
         self.mask_transform = mask_transform
         self.split = split
         self.bertencoding = bertencoding
-        self.bert = bert
+        self.use_bert = use_bert
         if features_path is not None and osp.exists(features_path):
             self.features_path = osp.abspath(features_path)
         else:
@@ -117,6 +118,9 @@ class ReferDataset(data.Dataset):
             imgset_file = '{0}_{1}.pth'.format(self.dataset, split)
             imgset_path = osp.join(dataset_path, imgset_file)
             self.images += torch.load(imgset_path)
+        
+        if self.use_bert:
+            self.bert_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
     def exists_dataset(self):
         return osp.exists(osp.join(self.split_root, self.dataset))
@@ -336,7 +340,11 @@ class ReferDataset(data.Dataset):
         return data, mask, size, phrase
 
     def tokenize_phrase(self, phrase):
-        return self.corpus.tokenize(phrase, self.query_len)
+        if self.use_bert:
+            input_dict = self.bert_tokenizer(phrase)
+            return input_dict["input_ids"], input_dict["attention_mask"]
+        else:
+            return self.corpus.tokenize(phrase, self.query_len), None    
 
     def untokenize_word_vector(self, words):
         return self.corpus.dictionary[words]
@@ -350,5 +358,12 @@ class ReferDataset(data.Dataset):
             data = self.transform(data)
         if self.mask_transform is not None:
             mask = self.mask_transform(mask)
-        phrase = self.tokenize_phrase(phrase)
-        return data, mask, size, phrase
+        text, text_l = self.tokenize_phrase(phrase)
+        return {
+            "input": data,
+            "target": mask,
+            "size": size,
+            "text": text,
+            "text_l": text_l,
+            "index": idx,
+        }

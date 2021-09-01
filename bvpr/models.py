@@ -63,7 +63,7 @@ class SegmentationModel(nn.Module):
         )
         self.text_encoder = self.setup_submodule(config, "text_encoder")
         num_channels = self.image_encoder.num_channels
-        hidden_size = self.text_encoder.config["hidden_size"]
+        hidden_size = self.text_encoder.hidden_size
         self.multimodal_encoder = MultimodalEncoder(
             config["multimodal_encoder"],
             in_channels=num_channels,
@@ -84,7 +84,7 @@ class SegmentationModel(nn.Module):
         submodule_class = eval(config["name"], **kwargs)
         return submodule_class(config)
 
-    def forward(self, image, phrase, size=None):
+    def forward(self, image, text, size=None, text_l=None):
         image_size = image.size()
         B, C, H, W = image_size
 
@@ -97,7 +97,8 @@ class SegmentationModel(nn.Module):
             image_size = torch.Size([B, 3, N * H, N * W])
             scale = sizes2scales(size, image_size)
 
-        txt = self.text_encoder(phrase)
+        txt = self.text_encoder(text, text_l)
+        txt = self.text_encoder.process_hidden(txt)
         joint = self.multimodal_encoder(vis, txt)
         outputs = self.mask_predictor(joint, image_size=image_size)
         return outputs
@@ -114,7 +115,7 @@ class ColorizationModel(nn.Module):
             config["use_location_embeddings"],
         )
         num_channels = self.image_encoder.num_channels
-        hidden_size = self.text_encoder.config["hidden_size"]
+        hidden_size = self.text_encoder.hidden_size
         self.multimodal_encoder = MultimodalEncoder(
             config["multimodal_encoder"],
             in_channels=num_channels,
@@ -135,6 +136,7 @@ class ColorizationModel(nn.Module):
         if C == 3:
             features = self.image_encoder(visual_input)
         txt = self.text_encoder(caption, caption_l)
+        txt = self.text_encoder.process_hidden(txt)
         joint = self.multimodal_encoder(features, txt)
         outputs = self.mask_predictor(joint)
         return outputs

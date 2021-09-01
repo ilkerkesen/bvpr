@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence
 from torchvision.models import resnet18, resnet50, resnet101
 from torchtext.vocab import GloVe
+from transformers import AutoModel
 # import clip
 
 from bvpr.util import add_batch_location_embeddings
@@ -23,6 +24,7 @@ W2V_DIM = 300
 
 __all__ = (
     "LSTMEncoder",
+    "BERTEncoder",
     "MaskPredictor",
     "ImageEncoder",
     "MultimodalEncoder",
@@ -206,6 +208,16 @@ class LSTMEncoder(nn.Module):
             batch_first=config.get("batch_first", False),
         )
         self.config = config
+    
+    @property
+    def hidden_size(self):
+        return self.config.get("hidden_size", 256)
+
+    def process_hidden(self, output):
+        hidden = inf_clamp(output[1][0])
+        L, B, T = hidden.size()
+        hidden = hidden.transpose(0, 1).reshape(B, -1)
+        return hidden
 
     def forward(self, x, x_l=None):
         embed = self.embedding(x)
@@ -234,10 +246,35 @@ class CaptionEncoder(nn.Module):
             bidirectional=config.get("bidirectional", False),
             batch_first=True)
         self.config = config
+    
+    @property
+    def hidden_size(self):
+        return self.config.get("hidden_size", 256)
 
     def forward(self, x, x_l):
         embed = pack_padded_sequence(self.embedding(x), x_l, batch_first=True) 
         return self.lstm(embed)
+
+
+class BERTEncoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.bert = AutoModel.from_pretrained("bert-base-uncased")
+        if config.get("freeze", True):
+            for p in self.bert.parameters():
+                p.requires_grad = False
+        self.config = config
+
+    @property
+    def hidden_size(self):
+        return 768
+
+    def process_hidden(self, output):
+        return output.last_hidden_state[:, 0, :]
+
+    def forward(self, x, x_l):
+        output = self.bert(input_ids=x, attention_mask=x_l)
+        return output
 
 
 class MaskPredictor(nn.Module):
@@ -425,12 +462,9 @@ class MultimodalEncoder(nn.Module):
         self.top_down = TopDownEncoder(self.config)
 
     def forward(self, visual, textual):
-        hidden = inf_clamp(textual[1][0])
-        L, B, T = hidden.size()
-        hidden = hidden.transpose(0, 1).reshape(B, -1)
         hidden_size = self.config["text_embedding_dim"] // self.config["num_layers"]
         parted = [
-            hidden[:, i*hidden_size:(i+1)*hidden_size]
+            textual[:, i*hidden_size:(i+1)*hidden_size]
             for i in range(self.config["num_layers"])
         ]
         y = self.bottom_up(visual, parted)
