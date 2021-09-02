@@ -2,6 +2,7 @@
 architecture: SegmentationModel
 multiscale: true
 use_location_embeddings: true
+project_text_embeddings: false
 text_encoder:
   name: LSTMEncoder
   hidden_size: 256
@@ -9,7 +10,7 @@ text_encoder:
   embedding_dim: 300
   glove: true
   dropout: 0.2
-  freeze: true # for bert only
+  freeze: false # for bert only
 image_encoder:
   name: deeplabv3plus_resnet50
   num_layers: 3

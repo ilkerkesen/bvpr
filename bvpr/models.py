@@ -61,9 +61,15 @@ class SegmentationModel(nn.Module):
             config["image_encoder"],
             config["use_location_embeddings"],
         )
+        
         self.text_encoder = self.setup_submodule(config, "text_encoder")
         num_channels = self.image_encoder.num_channels
-        hidden_size = self.text_encoder.hidden_size
+        hidden_size = self.text_encoder.hidden_size        
+        if config.get("project_text_embeddings", False):
+            self.projector = nn.Linear(hidden_size, hidden_size)
+        else:
+            self.projector = nn.Identity()
+
         self.multimodal_encoder = MultimodalEncoder(
             config["multimodal_encoder"],
             in_channels=num_channels,
@@ -99,6 +105,7 @@ class SegmentationModel(nn.Module):
 
         txt = self.text_encoder(text, text_l)
         txt = self.text_encoder.process_hidden(txt)
+        txt = self.projector(txt)
         joint = self.multimodal_encoder(vis, txt)
         outputs = self.mask_predictor(joint, image_size=image_size)
         return outputs

@@ -16,6 +16,7 @@ from bvpr.util import add_batch_location_embeddings
 from bvpr.util import MOBILENET_SIZE_MAP
 from bvpr.util import inf_clamp
 from bvpr.extra import deeplab
+from bvpr.extra.char_bert.model import CharacterBertModel
 
 
 GLOVE_DIM = 300
@@ -25,6 +26,7 @@ W2V_DIM = 300
 __all__ = (
     "LSTMEncoder",
     "BERTEncoder",
+    "CharBERTEncoder",
     "MaskPredictor",
     "ImageEncoder",
     "MultimodalEncoder",
@@ -208,7 +210,7 @@ class LSTMEncoder(nn.Module):
             batch_first=config.get("batch_first", False),
         )
         self.config = config
-    
+
     @property
     def hidden_size(self):
         return self.config.get("hidden_size", 256)
@@ -246,7 +248,7 @@ class CaptionEncoder(nn.Module):
             bidirectional=config.get("bidirectional", False),
             batch_first=True)
         self.config = config
-    
+
     @property
     def hidden_size(self):
         return self.config.get("hidden_size", 256)
@@ -259,11 +261,14 @@ class CaptionEncoder(nn.Module):
 class BERTEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.bert = AutoModel.from_pretrained("bert-base-uncased")
+        self.init_bert()
         if config.get("freeze", True):
             for p in self.bert.parameters():
                 p.requires_grad = False
         self.config = config
+
+    def init_bert(self):
+        self.bert = AutoModel.from_pretrained("bert-base-uncased")
 
     @property
     def hidden_size(self):
@@ -275,6 +280,19 @@ class BERTEncoder(nn.Module):
     def forward(self, x, x_l):
         output = self.bert(input_ids=x, attention_mask=x_l)
         return output
+
+
+class CharBERTEncoder(BERTEncoder):
+    def init_bert(self):
+        cache_dir = osp.expanduser("~/.cache/char_bert")
+        checkpoint_path = osp.join(cache_dir, 'general_character_bert/')
+        self.bert = CharacterBertModel.from_pretrained(checkpoint_path)
+
+    def process_hidden(self, output):
+        return output[0][:, 0, :]
+
+    def forward(self, x, x_l):
+        return self.bert(x)
 
 
 class MaskPredictor(nn.Module):
