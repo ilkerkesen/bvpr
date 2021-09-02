@@ -44,7 +44,7 @@ class BaseExperiment(LightningModule):
         params = []
         for component in self.model.children():
             param = {"params": component.parameters()}
-            if isinstance(component, BERTEncoder):
+            if issubclass(type(component), BERTEncoder):
                 # optimizer = torch.optim.AdamW
                 param["lr"] = 5e-5
             params.append(param)

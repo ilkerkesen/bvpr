@@ -451,6 +451,26 @@ class ImageEncoder(nn.Module):
 
         self.num_channels += 8 * self.use_location_embeddings
 
+    def setup_hub_deeplabv3(self, config):
+        model = torch.hub.load(
+            'pytorch/vision:v0.6.0',
+            'deeplabv3_resnet101',
+            pretrained=True,
+        )
+        layers = list(model.backbone.children())
+        num_layers = config["num_layers"]
+        self.model = nn.Sequential(*layers[:4+num_layers])
+
+        self.num_downsample = 2
+        if num_layers > 2:
+            self.num_downsample += 1
+
+        if num_layers > 0:
+            self.num_channels = 256 * 2**(num_layers-1)
+        else:
+            self.num_channels = 64 
+        self.num_channels += 8 * self.use_location_embeddings
+
     def setup_mobilenetv2(self, config):
         model = torch.hub.load(
             "pytorch/vision:v0.8.2",
