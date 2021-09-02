@@ -19,8 +19,8 @@ import lpips
 from bvpr.models import *
 from bvpr.criterion import *
 from bvpr.evaluation import *
-from bvpr.data.transform import LAB2RGB
 from bvpr.util import pretty_acc
+from bvpr.submodules import BERTEncoder
 
 
 class BaseExperiment(LightningModule):
@@ -37,9 +37,19 @@ class BaseExperiment(LightningModule):
     def configure_optimizers(self):
         optimizer = eval("torch.optim.{}".format(
             self.config["optimizer"]["method"]))
-        optimizers = [optimizer(
-            self.model.parameters(),
-            **self.config["optimizer"]["params"])]
+
+        components = self.model.children()
+        components = [c for c in components if not isinstance(c, BERTEncoder)]
+
+        params = []
+        for component in self.model.children():
+            param = {"params": component.parameters()}
+            if isinstance(component, BERTEncoder):
+                # optimizer = torch.optim.AdamW
+                param["lr"] = 5e-5
+            params.append(param)
+
+        optimizers = [optimizer(params, **self.config["optimizer"]["params"])]
 
         if self.config.get("scheduler") is None:
             return optimizers, []

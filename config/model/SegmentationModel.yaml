@@ -9,6 +9,7 @@ text_encoder:
   embedding_dim: 300
   glove: true
   dropout: 0.2
+  freeze: true # for bert only
 image_encoder:
   name: deeplabv3plus_resnet50
   num_layers: 3
