@@ -121,6 +121,8 @@ class ReferDataset(data.Dataset):
 
         if self.text_encoder == "BERTEncoder":
             self.bert_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+        elif self.text_encoder == "RobertaEncoder":
+            self.bert_tokenizer = AutoTokenizer.from_pretrained("roberta-base")
         elif self.text_encoder == "CharBERTEncoder":
             cache_dir = osp.expanduser("~/.cache/char_bert")
             checkpoint_path = osp.join(cache_dir, "bert-base-uncased/")
@@ -347,7 +349,7 @@ class ReferDataset(data.Dataset):
     def tokenize_phrase(self, phrase):
         if self.text_encoder == "LSTMEncoder":
             return self.corpus.tokenize(phrase, self.query_len), None
-        elif self.text_encoder == "BERTEncoder":
+        elif self.text_encoder in ("BERTEncoder", "RobertaEncoder"):
             input_dict = self.bert_tokenizer(phrase)
             return input_dict["input_ids"], input_dict["attention_mask"]
         elif self.text_encoder == "CharBERTEncoder":

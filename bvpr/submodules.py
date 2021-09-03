@@ -26,6 +26,7 @@ W2V_DIM = 300
 __all__ = (
     "LSTMEncoder",
     "BERTEncoder",
+    "RobertaEncoder",
     "CharBERTEncoder",
     "MaskPredictor",
     "ImageEncoder",
@@ -259,6 +260,8 @@ class CaptionEncoder(nn.Module):
 
 
 class BERTEncoder(nn.Module):
+    MODEL_NAME = "bert-base-uncased"
+    
     def __init__(self, config):
         super().__init__()
         self.init_bert()
@@ -268,7 +271,7 @@ class BERTEncoder(nn.Module):
         self.config = config
 
     def init_bert(self):
-        self.bert = AutoModel.from_pretrained("bert-base-uncased")
+        self.bert = AutoModel.from_pretrained(self.MODEL_NAME)
 
     @property
     def hidden_size(self):
@@ -280,6 +283,10 @@ class BERTEncoder(nn.Module):
     def forward(self, x, x_l):
         output = self.bert(input_ids=x, attention_mask=x_l)
         return output
+
+
+class RobertaEncoder(BERTEncoder):
+    MODEL_NAME = "roberta-base"
 
 
 class CharBERTEncoder(BERTEncoder):

@@ -211,7 +211,7 @@ def batch_char_bert_input(batch):
 def segmentation_collate_fn(text_encoder="LSTMEncoder"):
     if text_encoder == "LSTMEncoder":
         text_batch_fn = batch_lstm_input
-    elif text_encoder == "BERTEncoder":
+    elif text_encoder in ("BERTEncoder", "RobertaEncoder"):
         text_batch_fn = batch_bert_input
     elif text_encoder == "CharBERTEncoder":
         text_batch_fn = batch_char_bert_input
