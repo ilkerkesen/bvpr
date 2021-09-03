@@ -9,12 +9,14 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence
 from torchvision.models import resnet18, resnet50, resnet101
 from torchtext.vocab import GloVe
+from transformers import AutoModel
 # import clip
 
 from bvpr.util import add_batch_location_embeddings
 from bvpr.util import MOBILENET_SIZE_MAP
 from bvpr.util import inf_clamp
 from bvpr.extra import deeplab
+from bvpr.extra.char_bert.model import CharacterBertModel
 
 
 GLOVE_DIM = 300
@@ -23,6 +25,9 @@ W2V_DIM = 300
 
 __all__ = (
     "LSTMEncoder",
+    "BERTEncoder",
+    "RobertaEncoder",
+    "CharBERTEncoder",
     "MaskPredictor",
     "ImageEncoder",
     "MultimodalEncoder",
@@ -207,6 +212,16 @@ class LSTMEncoder(nn.Module):
         )
         self.config = config
 
+    @property
+    def hidden_size(self):
+        return self.config.get("hidden_size", 256)
+
+    def process_hidden(self, output):
+        hidden = inf_clamp(output[1][0])
+        L, B, T = hidden.size()
+        hidden = hidden.transpose(0, 1).reshape(B, -1)
+        return hidden
+
     def forward(self, x, x_l=None):
         embed = self.embedding(x)
         embed = inf_clamp(embed)
@@ -235,9 +250,56 @@ class CaptionEncoder(nn.Module):
             batch_first=True)
         self.config = config
 
+    @property
+    def hidden_size(self):
+        return self.config.get("hidden_size", 256)
+
     def forward(self, x, x_l):
         embed = pack_padded_sequence(self.embedding(x), x_l, batch_first=True) 
         return self.lstm(embed)
+
+
+class BERTEncoder(nn.Module):
+    MODEL_NAME = "bert-base-uncased"
+    
+    def __init__(self, config):
+        super().__init__()
+        self.init_bert()
+        if config.get("freeze", True):
+            for p in self.bert.parameters():
+                p.requires_grad = False
+        self.config = config
+
+    def init_bert(self):
+        self.bert = AutoModel.from_pretrained(self.MODEL_NAME)
+
+    @property
+    def hidden_size(self):
+        return 768
+
+    def process_hidden(self, output):
+        return output.last_hidden_state[:, 0, :]
+
+    def forward(self, x, x_l):
+        output = self.bert(input_ids=x, attention_mask=x_l)
+        return output
+
+
+class RobertaEncoder(BERTEncoder):
+    MODEL_NAME = "roberta-base"
+
+
+class CharBERTEncoder(BERTEncoder):
+    def init_bert(self):
+        cache_dir = osp.expanduser("~/.cache/char_bert")
+        checkpoint_path = osp.join(cache_dir, 'general_character_bert/')
+        self.bert = CharacterBertModel.from_pretrained(checkpoint_path)
+
+    def process_hidden(self, output):
+        return output[0][:, 0, :]
+
+    def forward(self, x, x_l):
+        return self.bert(x)
 
 
 class MaskPredictor(nn.Module):
@@ -396,6 +458,26 @@ class ImageEncoder(nn.Module):
 
         self.num_channels += 8 * self.use_location_embeddings
 
+    def setup_hub_deeplabv3(self, config):
+        model = torch.hub.load(
+            'pytorch/vision:v0.6.0',
+            'deeplabv3_resnet101',
+            pretrained=True,
+        )
+        layers = list(model.backbone.children())
+        num_layers = config["num_layers"]
+        self.model = nn.Sequential(*layers[:4+num_layers])
+
+        self.num_downsample = 2
+        if num_layers > 2:
+            self.num_downsample += 1
+
+        if num_layers > 0:
+            self.num_channels = 256 * 2**(num_layers-1)
+        else:
+            self.num_channels = 64 
+        self.num_channels += 8 * self.use_location_embeddings
+
     def setup_mobilenetv2(self, config):
         model = torch.hub.load(
             "pytorch/vision:v0.8.2",
@@ -425,12 +507,9 @@ class MultimodalEncoder(nn.Module):
         self.top_down = TopDownEncoder(self.config)
 
     def forward(self, visual, textual):
-        hidden = inf_clamp(textual[1][0])
-        L, B, T = hidden.size()
-        hidden = hidden.transpose(0, 1).reshape(B, -1)
         hidden_size = self.config["text_embedding_dim"] // self.config["num_layers"]
         parted = [
-            hidden[:, i*hidden_size:(i+1)*hidden_size]
+            textual[:, i*hidden_size:(i+1)*hidden_size]
             for i in range(self.config["num_layers"])
         ]
         y = self.bottom_up(visual, parted)

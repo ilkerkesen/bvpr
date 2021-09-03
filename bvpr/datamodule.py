@@ -12,6 +12,7 @@ from bvpr.data.colorization import ColorsDataset, FlowersDataset, COCODataset
 
 
 MAX_IMAGE_SIZE = 640
+MAX_WORD_LEN = 50
 
 
 def make_input_transform(normalizer, image_dim):
@@ -83,6 +84,11 @@ class SegmentationDataModule(pl.LightningDataModule):
         train_image_dim = config["image_size"]
         val_image_dim = MAX_IMAGE_SIZE
 
+        try:
+            self.text_encoder = config["model"]["text_encoder"]["name"]
+        except KeyError:
+            self.text_encoder = "LSTMEncoder"
+
         self.train_image_transform = ts.Compose([
             ts.ToTensor(),
             normalizer,
@@ -123,6 +129,7 @@ class SegmentationDataModule(pl.LightningDataModule):
                 split=train_split,
                 transform=self.train_image_transform,
                 mask_transform=self.train_mask_transform,
+                text_encoder=self.text_encoder,
                 **self.config["dataset"]
             )
 
@@ -130,6 +137,7 @@ class SegmentationDataModule(pl.LightningDataModule):
                 split=val_split,
                 transform=self.val_image_transform,
                 mask_transform=self.val_mask_transform,
+                text_encoder=self.text_encoder,
                 **self.config["dataset"]
             )
 
@@ -140,6 +148,7 @@ class SegmentationDataModule(pl.LightningDataModule):
                     split=split,
                     transform=self.val_image_transform,
                     mask_transform=self.val_mask_transform,
+                    text_encoder=self.text_encoder,
                     **self.config["dataset"]
                 )
                 self.test_datasplits.append(test_data)
@@ -148,14 +157,14 @@ class SegmentationDataModule(pl.LightningDataModule):
         return DataLoader(
             self.train_data,
             shuffle=True,
-            collate_fn=collate_fn(),
+            collate_fn=segmentation_collate_fn(self.text_encoder),
             **self.config["loader"])
 
     def val_dataloader(self):
         return DataLoader(
             self.val_data,
             shuffle=False,
-            collate_fn=collate_fn(),
+            collate_fn=segmentation_collate_fn(self.text_encoder),
             **self.config["loader"])
 
     def test_dataloader(self):
@@ -163,31 +172,66 @@ class SegmentationDataModule(pl.LightningDataModule):
         for test_data in self.test_datasplits:
             dataloader = DataLoader(
                 test_data,
-                collate_fn=collate_fn(),
+                collate_fn=segmentation_collate_fn(self.text_encoder),
                 **self.config["loader"],
             )
             dataloaders.append(dataloader)
         return dataloaders
 
 
-def collate_fn(task="segmentation"):
-    def collate_fn(batch):
-        batch = [bi for bi in batch if bi[0] is not None]
-        pack = lambda i: torch.cat([bi[i].unsqueeze(0) for bi in batch], 0)
-        input, target, size = tuple(pack(i) for i in range(len(batch[0])-1))
-        batchsize = len(batch)
-        longest = max([len(x[-1]) for x in batch])
-        text = torch.zeros((longest, batchsize), dtype=torch.long)
-        for (i,bi) in enumerate(batch):
-            sent = bi[-1]
-            text[-len(sent):, i] = sent
-        if task == "segmentation":
-            target = target.float()
-        elif task == "colorization":
-            target = target.long()
-        return input.half(), text, size, target
-    return collate_fn
+def batch_lstm_input(batch):
+    batchsize, longest = len(batch), max([len(x["text"]) for x in batch])
+    text = torch.zeros((longest, batchsize), dtype=torch.long)
+    text_l = None
+    for (i,bi) in enumerate(batch):
+        sent = bi["text"]
+        text[-len(sent):, i] = sent # FIXME: left padded
+    return text, text_l
 
+
+def batch_bert_input(batch):
+    batchsize, longest = len(batch), max([len(x["text"]) for x in batch])    
+    text = torch.zeros((batchsize, longest), dtype=torch.long)
+    text_l = torch.zeros((batchsize, longest), dtype=torch.long)
+    for (i,bi) in enumerate(batch):
+        text[i, :len(bi["text"])] = torch.tensor(bi["text"])
+        text_l[i, :len(bi["text_l"])] = torch.tensor(bi["text_l"])
+    return text, text_l
+
+
+def batch_char_bert_input(batch):
+    batchsize, longest = len(batch), max([len(x["text"]) for x in batch])    
+    text = torch.zeros((batchsize, longest, MAX_WORD_LEN), dtype=torch.long)
+    text_l = None
+    for (i,bi) in enumerate(batch):
+        text[i, :len(bi["text"]), :] = torch.tensor(bi["text"])
+    return text, text_l
+
+
+def segmentation_collate_fn(text_encoder="LSTMEncoder"):
+    if text_encoder == "LSTMEncoder":
+        text_batch_fn = batch_lstm_input
+    elif text_encoder in ("BERTEncoder", "RobertaEncoder"):
+        text_batch_fn = batch_bert_input
+    elif text_encoder == "CharBERTEncoder":
+        text_batch_fn = batch_char_bert_input
+
+    def _segmentation_collate_fn(batch):
+        batch = [bi for bi in batch if bi["input"] is not None]
+        batch = sorted(batch, key=lambda x: len(x["text"]), reverse=True)
+        pack = lambda i: torch.cat([bi[i].unsqueeze(0) for bi in batch], 0)
+        input, target, size = tuple(pack(i) for i in ("input", "target", "size"))
+        text, text_l = text_batch_fn(batch)
+
+        return {
+            "input": input.half(),
+            "text": text,
+            "size": size,
+            "target": target.half(),
+            "text_l": text_l,
+            "index": [bi["index"] for bi in batch],
+        }
+    return _segmentation_collate_fn
 
 def color_collate_fn(batch):
     batch = sorted(batch, key=lambda x: x["caption_len"], reverse=True)

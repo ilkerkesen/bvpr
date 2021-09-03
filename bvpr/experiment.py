@@ -19,8 +19,8 @@ import lpips
 from bvpr.models import *
 from bvpr.criterion import *
 from bvpr.evaluation import *
-from bvpr.data.transform import LAB2RGB
 from bvpr.util import pretty_acc
+from bvpr.submodules import BERTEncoder
 
 
 class BaseExperiment(LightningModule):
@@ -37,9 +37,19 @@ class BaseExperiment(LightningModule):
     def configure_optimizers(self):
         optimizer = eval("torch.optim.{}".format(
             self.config["optimizer"]["method"]))
-        optimizers = [optimizer(
-            self.model.parameters(),
-            **self.config["optimizer"]["params"])]
+
+        components = self.model.children()
+        components = [c for c in components if not isinstance(c, BERTEncoder)]
+
+        params = []
+        for component in self.model.children():
+            param = {"params": component.parameters()}
+            if issubclass(type(component), BERTEncoder):
+                # optimizer = torch.optim.AdamW
+                param["lr"] = 5e-5
+            params.append(param)
+
+        optimizers = [optimizer(params, **self.config["optimizer"]["params"])]
 
         if self.config.get("scheduler") is None:
             return optimizers, []
@@ -65,9 +75,10 @@ class SegmentationExperiment(BaseExperiment):
         self.IoU_thresholds = torch.arange(0.5, 1.0, 0.1).reshape(1, -1)
 
     def training_step(self, batch, batch_index):
-        image, text, size, target = batch
-        predicted = self(image, text, size)
-        loss = self.criterion(predicted, target, size)
+        image, text, size = batch["input"], batch["text"], batch["size"]
+        text_l = batch.get("text_l")
+        predicted = self(image, text, size=size, text_l=text_l)
+        loss = self.criterion(predicted, batch["target"], size)
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
@@ -75,8 +86,10 @@ class SegmentationExperiment(BaseExperiment):
         self.log("trn_loss", loss)
 
     def validation_step(self, batch, batch_index):
-        image, text, size, target = batch
-        predicted = self(image, text, size=size)
+        image, text, size = batch["input"], batch["text"], batch["size"]
+        text_l = batch.get("text_l")
+        target = batch["target"]
+        predicted = self(image, text, size=size, text_l=text_l)
         loss = self.criterion(predicted, target, size)
 
         if isinstance(predicted, tuple) or isinstance(predicted, list):
@@ -133,8 +146,10 @@ class SegmentationExperiment(BaseExperiment):
         data = self.test_dataloader()[dataloader_idx].dataset
         split = data.split
         index2word = self.model.text_encoder.config["corpus"].dictionary.idx2word
-        image, text, size, target = batch
-        predicted = self(image, text, size=size)
+        image, text, size = batch["input"], batch["text"], batch["size"]
+        text_l = batch.get("text_l")
+        target = batch["target"]
+        predicted = self(image, text, size=size, text_l=text_l)
 
         if isinstance(predicted, tuple) or isinstance(predicted, list):
             predicted = predicted[-1]
@@ -144,15 +159,14 @@ class SegmentationExperiment(BaseExperiment):
         intersection, union = compute_iou(thresholded, target, size)
         intersection, union = intersection.tolist(), union.tolist()
 
-        batch_size = self.test_dataloader()[dataloader_idx].batch_size
         for i in range(len(intersection)):
             word_indices = text[:, i].tolist()
             words = [index2word[index] for index in word_indices if index > 0]
             sentence = " ".join(words)
             I, U = intersection[i], union[i]
-            index = str(batch_index * batch_size + i)
+            index = batch["index"][i]
             outputs.append((index, split, sentence, I, U, I / U))
-        return outputs
+        return sorted(outputs, key=lambda x: x[0])
 
     def test_epoch_end(self, outputs):
         output_file = osp.abspath(osp.expanduser(self.config["output"]))

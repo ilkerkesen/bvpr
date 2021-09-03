@@ -9,6 +9,7 @@ https://github.com/chenxi116/TF-phrasecut-public/blob/master/build_batches.py
 """
 
 import os
+import cv2
 from skimage import io
 from skimage.transform import resize
 import json
@@ -20,9 +21,10 @@ import scipy.io as sio
 from referit import REFER
 import torch.utils.data as data
 from referit.refer import mask as cocomask
-from bvpr.data.corpus import Corpus
+from transformers import AutoTokenizer, BertTokenizer
 
-import cv2
+from bvpr.data.corpus import Corpus
+from bvpr.extra.char_bert.utils import CharacterIndexer
 
 
 class DatasetNotFoundError(Exception):
@@ -51,9 +53,9 @@ class ReferDataset(data.Dataset):
     }
 
     def __init__(self, data_root, split_root=None, dataset='referit',
-                 transform=None, mask_transform=None,
-                 split='train', max_query_len=-1, bertencoding=False,
-                 bert=False, corpus_file=None, features_path=None):
+                 transform=None, mask_transform=None, split='train',
+                 max_query_len=-1, text_encoder="LSTMEncoder",
+                 corpus_file=None, features_path=None):
         self.images = []
         self.data_root = osp.expanduser(data_root)
         self.split_root = split_root
@@ -66,8 +68,7 @@ class ReferDataset(data.Dataset):
         self.transform = transform
         self.mask_transform = mask_transform
         self.split = split
-        self.bertencoding = bertencoding
-        self.bert = bert
+        self.text_encoder = text_encoder
         if features_path is not None and osp.exists(features_path):
             self.features_path = osp.abspath(features_path)
         else:
@@ -117,6 +118,16 @@ class ReferDataset(data.Dataset):
             imgset_file = '{0}_{1}.pth'.format(self.dataset, split)
             imgset_path = osp.join(dataset_path, imgset_file)
             self.images += torch.load(imgset_path)
+
+        if self.text_encoder == "BERTEncoder":
+            self.bert_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+        elif self.text_encoder == "RobertaEncoder":
+            self.bert_tokenizer = AutoTokenizer.from_pretrained("roberta-base")
+        elif self.text_encoder == "CharBERTEncoder":
+            cache_dir = osp.expanduser("~/.cache/char_bert")
+            checkpoint_path = osp.join(cache_dir, "bert-base-uncased/")
+            self.bert_tokenizer = BertTokenizer.from_pretrained(checkpoint_path)
+            self.char_indexer = CharacterIndexer()
 
     def exists_dataset(self):
         return osp.exists(osp.join(self.split_root, self.dataset))
@@ -336,7 +347,15 @@ class ReferDataset(data.Dataset):
         return data, mask, size, phrase
 
     def tokenize_phrase(self, phrase):
-        return self.corpus.tokenize(phrase, self.query_len)
+        if self.text_encoder == "LSTMEncoder":
+            return self.corpus.tokenize(phrase, self.query_len), None
+        elif self.text_encoder in ("BERTEncoder", "RobertaEncoder"):
+            input_dict = self.bert_tokenizer(phrase)
+            return input_dict["input_ids"], input_dict["attention_mask"]
+        elif self.text_encoder == "CharBERTEncoder":
+            tokens = self.bert_tokenizer.basic_tokenizer.tokenize(phrase)
+            char_ids = self.char_indexer.tokens_to_indices(tokens)
+            return char_ids, None
 
     def untokenize_word_vector(self, words):
         return self.corpus.dictionary[words]
@@ -350,5 +369,12 @@ class ReferDataset(data.Dataset):
             data = self.transform(data)
         if self.mask_transform is not None:
             mask = self.mask_transform(mask)
-        phrase = self.tokenize_phrase(phrase)
-        return data, mask, size, phrase
+        text, text_l = self.tokenize_phrase(phrase)
+        return {
+            "input": data,
+            "target": mask,
+            "size": size,
+            "text": text,
+            "text_l": text_l,
+            "index": idx,
+        }
