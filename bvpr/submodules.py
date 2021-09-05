@@ -17,6 +17,7 @@ from bvpr.util import MOBILENET_SIZE_MAP
 from bvpr.util import inf_clamp
 from bvpr.extra import deeplab
 from bvpr.extra.char_bert.model import CharacterBertModel
+from bvpr.extra.darknet import init_darknet
 
 
 GLOVE_DIM = 300
@@ -488,6 +489,20 @@ class ImageEncoder(nn.Module):
         self.model = nn.Sequential(*layers[:num_layers])
         self.num_downsample = MOBILENET_SIZE_MAP[num_layers-1][1]
         self.num_channels = MOBILENET_SIZE_MAP[num_layers-1][0]
+        self.num_channels += 8 * self.use_location_embeddings
+
+    def setup_darknet(self, config):
+        path = osp.expanduser("~/.cache/darknet/darknet_pretrained.pth")
+        model = init_darknet(path)
+        num_layers = config["num_layers"]
+        layers = list(model.children())
+        self.model = nn.Sequential(*layers[:num_layers])
+        if num_layers < 7:
+            self.num_channels = 32 * 2**(num_layers-1)
+            self.num_downsample = num_layers - 1
+        else:
+            self.num_channels = 512 * 2**((num_layers-1) % 2)
+            self.num_downsample = 5
         self.num_channels += 8 * self.use_location_embeddings
 
     def forward(self, x, size=None):
