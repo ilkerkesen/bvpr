@@ -10,12 +10,14 @@ text_encoder:
   embedding_dim: 300
   glove: true
   dropout: 0.2
+  batch_first: true
   freeze: false # for bert only
 image_encoder:
   name: deeplabv3plus_resnet50
   num_layers: 3
   pretrained: true
   freeze: true
+  freeze_bn: false
 multimodal_encoder:
   topdown: true
   bottomup: true

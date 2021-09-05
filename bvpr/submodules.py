@@ -506,6 +506,8 @@ class ImageEncoder(nn.Module):
         self.num_channels += 8 * self.use_location_embeddings
 
     def forward(self, x, size=None):
+        if self.config.get("freeze_bn", False):
+            self.model.eval()
         y = self.model(x)
         if self.use_location_embeddings:
             y = add_batch_location_embeddings(y, size)

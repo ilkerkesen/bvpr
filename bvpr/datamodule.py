@@ -77,9 +77,13 @@ class SegmentationDataModule(pl.LightningDataModule):
     def __init__(self, config):
         super().__init__()
 
-        normalizer = ts.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225])
+
+        if config["model"]["image_encoder"]["name"] != "darknet":
+            normalizer = ts.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225])
+        else:
+            normalizer = ts.Lambda(lambda x: x)
 
         train_image_dim = config["image_size"]
         val_image_dim = MAX_IMAGE_SIZE
@@ -189,8 +193,19 @@ def batch_lstm_input(batch):
     return text, text_l
 
 
+def batch_lstm_input_fixed(batch):
+    batchsize, longest = len(batch), max([len(x["text"]) for x in batch])
+    text = torch.zeros((batchsize, longest), dtype=torch.long)
+    text_l = [None for i in range(batchsize)]
+    for (i,bi) in enumerate(batch):
+        sent = bi["text"]
+        text[i, :len(sent)] = sent
+        text_l[i] = len(sent)
+    return text, text_l
+
+
 def batch_bert_input(batch):
-    batchsize, longest = len(batch), max([len(x["text"]) for x in batch])    
+    batchsize, longest = len(batch), max([len(x["text"]) for x in batch])
     text = torch.zeros((batchsize, longest), dtype=torch.long)
     text_l = torch.zeros((batchsize, longest), dtype=torch.long)
     for (i,bi) in enumerate(batch):
@@ -200,7 +215,7 @@ def batch_bert_input(batch):
 
 
 def batch_char_bert_input(batch):
-    batchsize, longest = len(batch), max([len(x["text"]) for x in batch])    
+    batchsize, longest = len(batch), max([len(x["text"]) for x in batch])
     text = torch.zeros((batchsize, longest, MAX_WORD_LEN), dtype=torch.long)
     text_l = None
     for (i,bi) in enumerate(batch):
@@ -210,7 +225,7 @@ def batch_char_bert_input(batch):
 
 def segmentation_collate_fn(text_encoder="LSTMEncoder"):
     if text_encoder == "LSTMEncoder":
-        text_batch_fn = batch_lstm_input
+        text_batch_fn = batch_lstm_input_fixed
     elif text_encoder in ("BERTEncoder", "RobertaEncoder"):
         text_batch_fn = batch_bert_input
     elif text_encoder == "CharBERTEncoder":
@@ -242,7 +257,7 @@ def color_collate_fn(batch):
         captions[i, :bi["caption_len"]] = bi["caption"]
     captions_l = [bi["caption_len"] for bi in batch]
     targets = torch.cat([bi["target"].unsqueeze(0) for bi in batch], dim=0)
-    
+
     # prepare soft targets
     soft_targets = None
     if batch[0]["soft_target"] is not None:
