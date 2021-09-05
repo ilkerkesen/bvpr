@@ -20,7 +20,7 @@ from bvpr.models import *
 from bvpr.criterion import *
 from bvpr.evaluation import *
 from bvpr.util import pretty_acc
-from bvpr.submodules import BERTEncoder
+from bvpr.submodules import BERTEncoder, ImageEncoder
 
 
 class BaseExperiment(LightningModule):
@@ -44,7 +44,8 @@ class BaseExperiment(LightningModule):
         params = []
         for component in self.model.children():
             param = {"params": component.parameters()}
-            if issubclass(type(component), BERTEncoder):
+            if issubclass(type(component), BERTEncoder) or \
+                isinstance(type(component), ImageEncoder):
                 # optimizer = torch.optim.AdamW
                 param["lr"] = 5e-5
             params.append(param)
