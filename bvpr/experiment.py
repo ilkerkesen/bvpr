@@ -43,12 +43,17 @@ class BaseExperiment(LightningModule):
 
         params = []
         for component in self.model.children():
-            param = {"params": component.parameters()}
             if issubclass(type(component), BERTEncoder) or \
                 isinstance(type(component), ImageEncoder):
                 # optimizer = torch.optim.AdamW
-                param["lr"] = 5e-5
-            params.append(param)
+                param = {"params": component.model.parameters(), 'lr': 5e-5}
+                params.append(param)
+                try:  # for multiple resolution models
+                    params.append({'params': component.layers.parameters()})
+                except AttributeError:
+                    pass
+            else:
+                params.append({"params": component.parameters()})
 
         optimizers = [optimizer(params, **self.config["optimizer"]["params"])]
 

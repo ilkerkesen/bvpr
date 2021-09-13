@@ -3,6 +3,8 @@ architecture: SegmentationModel
 multiscale: true
 use_location_embeddings: true
 project_text_embeddings: false
+locate_then_segment: false
+lambda: 0.1
 text_encoder:
   name: LSTMEncoder
   hidden_size: 256
@@ -18,6 +20,8 @@ image_encoder:
   pretrained: true
   freeze: true
   freeze_bn: false
+  checkpoint: null
+  normalize_scores: true
 multimodal_encoder:
   topdown: true
   bottomup: true
@@ -30,6 +34,8 @@ multimodal_encoder:
   text_kernel_size: 1  
   layer: "conv"  # or film
 mask_predictor:
+  name: "MaskPredictor"
+  use_aspp: false
   num_channels: 512
   kernel_size: 5
   stride: 2
