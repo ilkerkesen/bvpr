@@ -404,6 +404,13 @@ class ImageEncoder(nn.Module):
         if config["freeze"]:
             for par in self.model.parameters():
                 par.requires_grad = False
+ 
+    def train(self, mode=True):
+        super().train(mode=mode)
+        if self.config.get("freeze_bn", True):
+            for m in self.model.modules():
+                if isinstance(m, nn.BatchNorm2d):
+                    m.eval()
 
     def setup_resnet18(self, config):
         net = resnet18(pretrained=config["pretrained"], progress=True)
@@ -431,7 +438,7 @@ class ImageEncoder(nn.Module):
 
     def setup_deeplabv3plus_resnet50(self, config):
         cache_dir = osp.abspath(osp.expanduser("~/.cache/torch/checkpoints"))
-        filename = "best_deeplabv3plus_resnet101_voc_os16.pth"
+        filename = "best_deeplabv3plus_resnet50_voc_os16.pth"
         filepath = osp.join(cache_dir, filename)
         ckpt = torch.load(filepath)
         model = deeplab.deeplabv3plus_resnet50()
@@ -452,13 +459,13 @@ class ImageEncoder(nn.Module):
     def setup_deeplabv3plus_resnet101(self, config):
         if config.get("checkpoint") is None:
             cache_dir = osp.abspath(osp.expanduser("~/.cache/torch/checkpoints"))
-            filename = "best_default_deeplabv3plus_resnet101_coco_os16.pth"
+            filename = "deeplabv3plus_resnet101-coco-voc.pth"
             filepath = osp.join(cache_dir, filename)
         else:
             filepath = osp.abspath(osp.expanduser(config["checkpoint"]))
         ckpt = torch.load(filepath)
-        ckpt["model_state"].pop("classifier.classifier.3.weight")
-        ckpt["model_state"].pop("classifier.classifier.3.bias")
+        # ckpt["model_state"].pop("classifier.classifier.3.weight")
+        # ckpt["model_state"].pop("classifier.classifier.3.bias")
         model = deeplab.deeplabv3plus_resnet101()
         model.load_state_dict(ckpt["model_state"], strict=False)
         layers = list(model.backbone.children())
@@ -617,8 +624,6 @@ class ImageEncoder(nn.Module):
         self.setup_yolov5(config, architecture="yolov5m")
 
     def forward(self, x, size=None):
-        if self.config.get("freeze_bn", False):
-            self.model.eval()
         if self.config["name"].startswith("multires"):
             y = self.forward_multires(x)
         elif self.config["name"].startswith("segmentation"):

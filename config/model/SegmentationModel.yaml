@@ -15,11 +15,11 @@ text_encoder:
   batch_first: true
   freeze: false # for bert only
 image_encoder:
-  name: deeplabv3plus_resnet50
+  name: deeplabv3plus_resnet101
   num_layers: 3
   pretrained: true
   freeze: true
-  freeze_bn: false
+  freeze_bn: true
   checkpoint: null
   normalize_scores: true
 multimodal_encoder:

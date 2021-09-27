@@ -21,6 +21,7 @@ from bvpr.criterion import *
 from bvpr.evaluation import *
 from bvpr.util import pretty_acc
 from bvpr.submodules import BERTEncoder, ImageEncoder
+from bvpr.extra.dcrf import DenseCRF
 
 
 class BaseExperiment(LightningModule):
@@ -80,6 +81,13 @@ class SegmentationExperiment(BaseExperiment):
         self.thresholds = torch.arange(0, 1, step=0.05).tolist()
         self.IoU_thresholds = torch.arange(0.5, 1.0, 0.1).reshape(1, -1)
 
+        if self.use_dcrf:
+            self.dcrf = DenseCRF(**config["dcrf"])
+
+    @property
+    def use_dcrf(self):
+        return self.config.get("use_dcrf", False)
+
     def training_step(self, batch, batch_index):
         image, text, size = batch["input"], batch["text"], batch["size"]
         text_l = batch.get("text_l")
@@ -135,7 +143,7 @@ class SegmentationExperiment(BaseExperiment):
         cum_IoU = 100*(cum_I / cum_U)
         mIoU = 100*(total_IoU / num_instances)
 
-        IoU = cum_IoU  # FIXME: add option for this
+        IoU = cum_IoU
         threshold_idx = IoU.argmax().item()
         threshold_val = self.thresholds[threshold_idx]
         this_precision = precision[threshold_idx].tolist()
@@ -160,17 +168,31 @@ class SegmentationExperiment(BaseExperiment):
         if isinstance(predicted, tuple) or isinstance(predicted, list):
             predicted = predicted[-1]
         predicted = torch.sigmoid(predicted)
-        threshold = self.config["threshold"]
-        thresholded = (predicted > threshold).float().data
-        intersection, union = compute_iou(thresholded, target, size)
+        threshold = self.config.get("threshold")
+
+        if self.use_dcrf:
+            segmap = torch.zeros_like(target)
+            intersection, union = [], []
+            for i,idx in enumerate(batch["index"]):
+                filename = data.images[idx][0]
+                raw_image = data.read_image(filename)[0]
+                h, w = raw_image.shape[:2]
+                probs = predicted[i, :, :h, :w].detach().cpu().numpy()
+                probs = np.concatenate([probs, 1-probs], axis=0)
+                Q = self.dcrf(raw_image, probs)
+                this = torch.tensor(Q[0, :, :])
+                segmap[i, 0, :h, :w] = this
+            segmap = (segmap >= threshold).float().data
+        else:
+            segmap = (predicted >= threshold).float().data
+
+        intersection, union = compute_iou(segmap, target, size)
         intersection, union = intersection.tolist(), union.tolist()
 
         for i in range(len(intersection)):
-            word_indices = text[:, i].tolist()
-            words = [index2word[index] for index in word_indices if index > 0]
-            sentence = " ".join(words)
-            I, U = intersection[i], union[i]
             index = batch["index"][i]
+            sentence = data.images[index][2]
+            I, U = intersection[i], union[i]
             outputs.append((index, split, sentence, I, U, I / U))
         return sorted(outputs, key=lambda x: x[0])
 
@@ -179,7 +201,7 @@ class SegmentationExperiment(BaseExperiment):
         with open(output_file, "w") as f:
             for dataset_outputs in outputs:
                 for batch_outputs in dataset_outputs:
-                    lines = [",".join([str(x) for x in output]) + "\n"
+                    lines = ["\t".join([str(x) for x in output]) + "\n"
                              for output in batch_outputs]
                     f.writelines(lines)
 

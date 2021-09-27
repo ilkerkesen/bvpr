@@ -46,6 +46,10 @@ class ReferDataset(data.Dataset):
             'splits': ('train', 'val'),
             'params': {'dataset': 'refcocog', 'split_by': 'google'}
         },
+        'gref-umd': {
+            'splits': ('train', 'val', 'test'),
+            'params': {'dataset': 'refcocog', 'split_by': 'umd'},
+        },
         'clevr': {
             'splits': ('train', 'val'),
             'params': {'dataset': 'clevr-ref+', 'split_by':'ccvl'}
@@ -218,7 +222,7 @@ class ReferDataset(data.Dataset):
                 str(ref['image_id']).zfill(12))
 
             if osp.exists(osp.join(self.im_dir, img_filename)):
-                h, w, _ = io.imread(osp.join(self.im_dir, img_filename)).shape
+                h, w = io.imread(osp.join(self.im_dir, img_filename)).shape[:2]
                 seg = refer.anns[ref['ann_id']]['segmentation']
                 rle = cocomask.frPyObjects(seg, h, w)
                 mask = np.max(cocomask.decode(rle), axis=2).astype(np.float32)

@@ -72,6 +72,7 @@ class SegmentationDataModule(pl.LightningDataModule):
         "unc+": ("val", "testA", "testB"),
         "referit": ("test",),
         "gref": ("val",),
+        "gref-umd": ("val", "test"),
     }
 
     def __init__(self, config):
