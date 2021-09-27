@@ -13,6 +13,7 @@ __all__ = (
     "MaskedBCELoss",
     "MaskedBCEWithLogitsLoss",
     "MaskedMultiScaleBCELoss",
+    "NewMultiScaleLoss",
 )
 
 
@@ -96,9 +97,11 @@ class MaskedMultiScaleBCELoss(nn.BCELoss):
 
     def forward(self, logits_list, target, sizes):
         iter_loss = 0
-        ratio = 1 / ( 2 ** (len(logits_list) - 1))
+        H = target.shape[2]
         for logits in logits_list:
             if sizes is not None:
+                H_ = logits.shape[2]
+                ratio = H_ / H
                 scaled_sizes = [(int(t[0] * ratio), int(t[1] * ratio)) for t in sizes]
                 if ratio < 1.0:
                     resize_shape = (int(target.size(2) * ratio), int(target.size(3) * ratio))
@@ -111,8 +114,35 @@ class MaskedMultiScaleBCELoss(nn.BCELoss):
                 ypred, ygold,
                 weight=self.weight,
                 reduction=self.reduction)
-            if ratio == 0.5:
-                ratio = 1.0
-            else:
-                ratio = ratio * 2
         return iter_loss
+
+
+class NewMultiScaleLoss(nn.BCELoss):
+    def __init__(self, weight=None, size_average=None, reduce=None, reduction='mean', ignore_index=-1):
+        super().__init__(weight, size_average, reduce, reduction)
+        self.ignore_index = ignore_index
+
+    def forward(self, logits_list, target, sizes):
+        total_loss = 0
+        total_pixels = 0
+        H, W = target.shape[2:]
+        for logits in logits_list:
+            num_pixels = H*W
+            if sizes is not None:
+                H_, W_ = logits.shape[2:]
+                ratio = (H_ / H, W_ / W)
+                scaled_sizes = [(int(t[0] * ratio[0]), int(t[1] * ratio[1])) for t in sizes]
+                if min(ratio) < 1.0:
+                    resize_shape = (int(target.size(2) * ratio), int(target.size(3) * ratio))
+                    resized_target = F.interpolate(target, resize_shape, mode='nearest')
+                else:
+                    resized_target = target
+                num_pixels = sum([x[0] * x[1] for x in scaled_sizes])
+                mask = make_mask(scaled_sizes, resized_target.size()[-2:])
+                ypred, ygold = logits[mask], resized_target[mask]
+            total_loss += F.binary_cross_entropy_with_logits(
+                ypred, ygold,
+                weight=self.weight,
+                reduction='sum')
+            total_pixels += num_pixels
+        return total_loss / total_pixels

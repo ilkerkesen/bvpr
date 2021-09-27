@@ -16,7 +16,16 @@ criterion: "MaskedMultiScaleBCELoss"
 loader:
   batch_size: 32
   pin_memory: false
-  num_workers: 16
+  num_workers: 5
+
+use_dcrf: false
+dcrf:
+  iter_max: 5
+  pos_w: 3
+  pos_xy_std: 3
+  bi_w: 10
+  bi_xy_std: 20
+  bi_rgb_std: 3
 
 # hydra-specific
 hydra:

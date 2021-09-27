@@ -61,7 +61,7 @@ class SegmentationModel(nn.Module):
             config["image_encoder"],
             config["use_location_embeddings"],
         )
-        
+
         self.text_encoder = self.setup_submodule(config, "text_encoder")
         num_channels = self.image_encoder.num_channels
         hidden_size = self.text_encoder.hidden_size        
@@ -76,13 +76,27 @@ class SegmentationModel(nn.Module):
             text_embedding_dim=hidden_size,
         )
 
-        self.mask_predictor = MaskPredictor(
+        head_name = config["mask_predictor"].get("name", "MaskPredictor")
+        if head_name == "MaskPredictor":
+            head_class = MaskPredictor
+        elif head_name == "ASPPHead":
+            head_class = ASPPHead
+
+        in_channels = config["multimodal_encoder"]["num_kernels"]
+        self.locate_then_segment = False
+        if config.get("locate_then_segment", False):
+            self.locate_then_segment = True
+            self.locate_net = nn.Conv2d(in_channels, 1, 1, 1, 0)
+            in_channels += 1
+
+        self.mask_predictor = head_class(
             config["mask_predictor"],
-            in_channels=config["multimodal_encoder"]["num_kernels"],
+            in_channels=in_channels,
             num_layers=self.image_encoder.num_downsample,
             multiscale=config["multiscale"],
             num_classes=self.NUM_CLASSES,
         )
+        
         self.config = config
 
     def setup_submodule(self, model_config, submodule, **kwargs):
@@ -107,7 +121,12 @@ class SegmentationModel(nn.Module):
         txt = self.text_encoder.process_hidden(txt)
         txt = self.projector(txt)
         joint = self.multimodal_encoder(vis, txt)
+        if self.locate_then_segment:
+            loc = self.locate_net(joint)
+            joint = torch.cat([joint, loc], dim=1)
         outputs = self.mask_predictor(joint, image_size=image_size)
+        if self.locate_then_segment:
+            outputs = [loc] + outputs
         return outputs
 
 

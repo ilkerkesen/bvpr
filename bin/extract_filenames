@@ -1,0 +1,56 @@
+#!/usr/bin/env python
+
+import json
+from bvpr.data.refexp import ReferDataset
+import os.path as osp
+import click
+
+
+@click.command()
+@click.option("--data-dir", required=True, type=click.Path(exists=True))
+@click.option("--annotation-dir", required=True, type=click.Path(exists=True))
+@click.option("--output", required=True, type=click.Path())
+def main(data_dir, annotation_dir, output):
+    data_splits = {
+        'unc': ['val', 'testA', 'testB'],
+        'unc+': ['val', 'testA', 'testB'],
+        'gref': ['val'],
+    }
+
+    data_dir = osp.abspath(osp.expanduser(data_dir))
+    annotation_dir = osp.abspath(osp.expanduser(annotation_dir))
+    output = osp.abspath(osp.expanduser(output))
+
+    filenames2014 = set()
+    for dataset, splits in data_splits.items():
+        for split in splits:
+            data = ReferDataset(data_dir, dataset=dataset, split=split)
+            filenames2014.update([x[0] for x in data.images])
+
+    filenames2014 = sorted(list(filenames2014))
+    filename2url = dict()
+    with open(osp.join(annotation_dir, "captions_train2014.json")) as f:
+        captions_train2014 = json.load(f)
+        for image in captions_train2014["images"]:
+            filename2url[image["file_name"]] = image["flickr_url"]
+
+    flickr_urls = list()
+    for filename in filenames2014:
+        flickr_urls.append(filename2url[filename])
+
+    filenames2017 = list()
+    with open(osp.join(annotation_dir, "captions_train2017.json")) as f:
+        captions_train2017 = json.load(f)
+        for image in captions_train2017["images"]:
+            filename = image["file_name"]
+            flickr_url = image["flickr_url"]
+
+            if flickr_url in flickr_urls:
+                filenames2017.append(filename)
+
+    with open(output, "w") as f:
+        f.write("\n".join(filenames2017))
+
+
+if __name__ == "__main__":
+    main()

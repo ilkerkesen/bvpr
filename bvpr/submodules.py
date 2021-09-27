@@ -1,3 +1,4 @@
+from bvpr.extra.yolov5 import YOLO_LAYER_CONF, YOLOBackbone
 import os
 import os.path as osp
 from copy import deepcopy
@@ -10,6 +11,7 @@ from torch.nn.utils.rnn import pack_padded_sequence
 from torchvision.models import resnet18, resnet50, resnet101
 from torchtext.vocab import GloVe
 from transformers import AutoModel
+from torchvision.models.segmentation.deeplabv3 import DeepLabHead
 # import clip
 
 from bvpr.util import add_batch_location_embeddings
@@ -30,6 +32,7 @@ __all__ = (
     "RobertaEncoder",
     "CharBERTEncoder",
     "MaskPredictor",
+    "ASPPHead",
     "ImageEncoder",
     "MultimodalEncoder",
     "SegmentationHead",
@@ -51,7 +54,7 @@ def get_glove_cache():
 
 
 def get_glove_vectors(corpus, cache=get_glove_cache()):
-    glove = GloVe(name='840B', dim=300, cache=cache) 
+    glove = GloVe(name='840B', dim=300, cache=cache)
     vectors = np.zeros((len(corpus.dictionary), 300))
     count = 0
     for word, idx in corpus.dictionary.word2idx.items():
@@ -73,7 +76,7 @@ def get_glove_vectors(corpus, cache=get_glove_cache()):
 
 class CBR(nn.Module):
     """(conv => BN => Relu)"""
-    def __init__(self, in_channels, out_channels, kernel_size, stride, padding):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, groups=1):
         super(CBR, self).__init__()
         self.conv = nn.Sequential(
             HalfConv2d(
@@ -81,7 +84,8 @@ class CBR(nn.Module):
                 out_channels,
                 kernel_size,
                 stride=stride,
-                padding=padding),
+                padding=padding,
+                groups=1),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
@@ -256,13 +260,13 @@ class CaptionEncoder(nn.Module):
         return self.config.get("hidden_size", 256)
 
     def forward(self, x, x_l):
-        embed = pack_padded_sequence(self.embedding(x), x_l, batch_first=True) 
+        embed = pack_padded_sequence(self.embedding(x), x_l, batch_first=True)
         return self.lstm(embed)
 
 
 class BERTEncoder(nn.Module):
     MODEL_NAME = "bert-base-uncased"
-    
+
     def __init__(self, config):
         super().__init__()
         self.init_bert()
@@ -307,6 +311,9 @@ class MaskPredictor(nn.Module):
     def __init__(
             self, config, in_channels, num_layers, multiscale, num_classes=1):
         super().__init__()
+        self.use_aspp = config.get("use_aspp", False)
+        if self.use_aspp:
+            self.aspp = DeepLabHead(in_channels, in_channels)
         self.layers  = nn.ModuleList()
         self.loss_output_layers = nn.ModuleList()
         layer_kwargs = {
@@ -350,6 +357,9 @@ class MaskPredictor(nn.Module):
         if image_size is not None:
             _, _, H, W = image_size
 
+        if self.use_aspp:
+            x = self.aspp(x)
+
         for i, layer in enumerate(self.layers):
             output_size = None
             if image_size is not None:
@@ -369,16 +379,38 @@ class MaskPredictor(nn.Module):
         return outputs
 
 
+class ASPPHead(nn.Module):
+    def __init__(self, config, in_channels, num_layers, multiscale, num_classes=1):
+        super().__init__()
+        self.head = DeepLabHead(in_channels, num_classes)
+        self.config = config
+
+    def forward(self, x, image_size=None):
+        x = self.head(x)
+        if image_size is not None:
+            h, w = image_size[-2:]
+            x = F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False)
+        return [x]
+
+
 class ImageEncoder(nn.Module):
     def __init__(self, config, use_location_embeddings=True):
         super().__init__()
         self.config = config
+        self.layers = None
         self.use_location_embeddings = use_location_embeddings
         setup_func = eval("self.setup_{}".format(config["name"]))
         setup_func(config)
         if config["freeze"]:
             for par in self.model.parameters():
                 par.requires_grad = False
+ 
+    def train(self, mode=True):
+        super().train(mode=mode)
+        if self.config.get("freeze_bn", True):
+            for m in self.model.modules():
+                if isinstance(m, nn.BatchNorm2d):
+                    m.eval()
 
     def setup_resnet18(self, config):
         net = resnet18(pretrained=config["pretrained"], progress=True)
@@ -425,12 +457,17 @@ class ImageEncoder(nn.Module):
         self.num_channels += 8 * self.use_location_embeddings
 
     def setup_deeplabv3plus_resnet101(self, config):
-        cache_dir = osp.abspath(osp.expanduser("~/.cache/torch/checkpoints"))
-        filename = "best_deeplabv3plus_resnet101_voc_os16.pth"
-        filepath = osp.join(cache_dir, filename)
+        if config.get("checkpoint") is None:
+            cache_dir = osp.abspath(osp.expanduser("~/.cache/torch/checkpoints"))
+            filename = "deeplabv3plus_resnet101-coco-voc.pth"
+            filepath = osp.join(cache_dir, filename)
+        else:
+            filepath = osp.abspath(osp.expanduser(config["checkpoint"]))
         ckpt = torch.load(filepath)
+        # ckpt["model_state"].pop("classifier.classifier.3.weight")
+        # ckpt["model_state"].pop("classifier.classifier.3.bias")
         model = deeplab.deeplabv3plus_resnet101()
-        model.load_state_dict(ckpt["model_state"])
+        model.load_state_dict(ckpt["model_state"], strict=False)
         layers = list(model.backbone.children())
         num_layers = config["num_layers"]
         self.model = nn.Sequential(*layers[:4+num_layers])
@@ -442,6 +479,48 @@ class ImageEncoder(nn.Module):
 
         self.num_channels = min(256 * 2**(num_layers-1), 2048)
         self.num_channels += 8 * self.use_location_embeddings
+        
+    def setup_multires_deeplabv3plus_resnet101(self, config):
+        if config.get("checkpoint") is None:
+            cache_dir = osp.abspath(osp.expanduser("~/.cache/torch/checkpoints"))
+            filename = "best_default_deeplabv3plus_resnet101_coco_os16.pth"
+            filepath = osp.join(cache_dir, filename)
+        else:
+            filepath = osp.abspath(osp.expanduser(config["checkpoint"]))
+        ckpt = torch.load(filepath)
+        ckpt["model_state"].pop("classifier.classifier.3.weight")
+        ckpt["model_state"].pop("classifier.classifier.3.bias")
+        model = deeplab.deeplabv3plus_resnet101()
+        model.load_state_dict(ckpt["model_state"], strict=False)
+        layers = list(model.backbone.children())
+        self.model = nn.ModuleList(layers)
+        self.outputs = [5, 6, len(layers)-1]
+        self.layers = nn.ModuleList([
+            nn.Identity(),
+            nn.Identity(),
+            nn.Identity(),
+        ])
+        
+        self.num_downsample = 3
+        self.num_channels = 512 + 1024 + 2048
+        self.num_channels += 8 * self.use_location_embeddings
+        
+    def setup_segmentation_deeplabv3plus_resnet101(self, config):
+        if config.get("checkpoint") is None:
+            cache_dir = osp.abspath(osp.expanduser("~/.cache/torch/checkpoints"))
+            filename = "best_default_deeplabv3plus_resnet101_coco_os16.pth"
+            filepath = osp.join(cache_dir, filename)
+        else:
+            filepath = osp.abspath(osp.expanduser(config["checkpoint"]))
+        ckpt = torch.load(filepath)
+        ckpt["model_state"].pop("classifier.classifier.3.weight")
+        ckpt["model_state"].pop("classifier.classifier.3.bias")
+        model = deeplab.deeplabv3plus_resnet101()
+        model.load_state_dict(ckpt["model_state"], strict=False)
+        self.num_downsample = 2
+        self.num_channels = 256 + 21
+        self.num_channels += 8 * self.use_location_embeddings
+        self.model = model
 
     def setup_clip_resnet101(self, config):
         model, _ = clip.load("RN101")
@@ -476,7 +555,7 @@ class ImageEncoder(nn.Module):
         if num_layers > 0:
             self.num_channels = 256 * 2**(num_layers-1)
         else:
-            self.num_channels = 64 
+            self.num_channels = 64
         self.num_channels += 8 * self.use_location_embeddings
 
     def setup_mobilenetv2(self, config):
@@ -492,7 +571,7 @@ class ImageEncoder(nn.Module):
         self.num_channels += 8 * self.use_location_embeddings
 
     def setup_darknet(self, config):
-        path = osp.expanduser("~/.cache/darknet/darknet_pretrained.pth")
+        path = osp.expanduser("~/.cache/darknet/unc_darknet.pth")
         model = init_darknet(path)
         num_layers = config["num_layers"]
         layers = list(model.children())
@@ -505,13 +584,73 @@ class ImageEncoder(nn.Module):
             self.num_downsample = 5
         self.num_channels += 8 * self.use_location_embeddings
 
+    def setup_multires_darknet(self, config):
+        path = osp.expanduser("~/.cache/darknet/unc_darknet.pth")
+        model = init_darknet(path)
+        self.model = nn.ModuleList(list(model.children()))
+        self.num_channels = 256 + 512 + 1024
+        self.num_channels += 8 * self.use_location_embeddings
+        self.num_downsample = 5
+        self.outputs = [3, 4, len(self.model)-1]
+        init_layer = lambda ci: CBR(ci, ci, 5, 2, 2)
+        
+        self.layers = nn.ModuleList([
+            nn.Sequential(init_layer(256), init_layer(256)),
+            init_layer(512),
+            nn.Identity(),
+        ])
+
+    def setup_yolov5(self, config, architecture="yolov5x"):
+        model = torch.hub.load(
+            'ultralytics/yolov5',
+            architecture,
+            pretrained=True)
+        save = model.model.save
+        num_layers = config["num_layers"]
+        layers = [l for l in model.model.model][:num_layers]
+        num_channels, num_downsample = YOLO_LAYER_CONF[architecture][num_layers-1]
+        self.model = YOLOBackbone(layers, save)
+        self.num_channels = num_channels
+        self.num_downsample = num_downsample
+        self.num_channels += 8 * self.use_location_embeddings
+
+    def setup_yolov5x(self, config):
+        self.setup_yolov5(config)
+
+    def setup_yolo5l(self, config):
+        self.setup_yolov5(config, architecture="yolov5l")
+
+    def setup_yolo5m(self, config):
+        self.setup_yolov5(config, architecture="yolov5m")
+
     def forward(self, x, size=None):
-        if self.config.get("freeze_bn", False):
-            self.model.eval()
-        y = self.model(x)
+        if self.config["name"].startswith("multires"):
+            y = self.forward_multires(x)
+        elif self.config["name"].startswith("segmentation"):
+            y = self.forward_segmentation(x)
+        else:
+            y = self.model(x)
         if self.use_location_embeddings:
             y = add_batch_location_embeddings(y, size)
         return y
+
+    def forward_multires(self, x):
+        outputs = []
+        for i, layer in enumerate(self.model):
+            x = layer(x)
+            if i in self.outputs:
+                outputs.append(x)
+        for i, output in enumerate(outputs):
+            outputs[i] = self.layers[i](output)
+        return torch.cat(outputs, dim=1)
+
+    def forward_segmentation(self, x):
+        features = self.model.backbone(x)
+        low_level_features = features["low_level"]
+        scores = self.model.classifier(features)
+        if self.config.get("normalize_scores", False):
+            scores = F.softmax(scores, dim=1)
+        return torch.cat([low_level_features, scores], dim=1)
 
 
 class MultimodalEncoder(nn.Module):

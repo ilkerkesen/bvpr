@@ -72,18 +72,24 @@ class SegmentationDataModule(pl.LightningDataModule):
         "unc+": ("val", "testA", "testB"),
         "referit": ("test",),
         "gref": ("val",),
+        "gref-umd": ("val", "test"),
     }
 
     def __init__(self, config):
         super().__init__()
 
+        try:
+            image_encoder = config["model"]["image_encoder"]["name"]
+        except:
+            image_encoder = "deeplabv3_resnet50"
 
-        if config["model"]["image_encoder"]["name"] != "darknet":
+        if "darknet" in image_encoder or image_encoder.startswith("yolo"):
+            print("yolo")
+            normalizer = ts.Lambda(lambda x: x)
+        else:
             normalizer = ts.Normalize(
                 mean=[0.485, 0.456, 0.406],
                 std=[0.229, 0.224, 0.225])
-        else:
-            normalizer = ts.Lambda(lambda x: x)
 
         train_image_dim = config["image_size"]
         val_image_dim = MAX_IMAGE_SIZE
@@ -239,10 +245,10 @@ def segmentation_collate_fn(text_encoder="LSTMEncoder"):
         text, text_l = text_batch_fn(batch)
 
         return {
-            "input": input.half(),
+            "input": input,
             "text": text,
             "size": size,
-            "target": target.half(),
+            "target": target,
             "text_l": text_l,
             "index": [bi["index"] for bi in batch],
         }
