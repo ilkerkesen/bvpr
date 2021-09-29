@@ -12,12 +12,14 @@ from tqdm import tqdm
 from skimage import io, color
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from torchvision.transforms import functional as F
 from torch.utils.data import Dataset
 from torchvision.datasets import CocoCaptions
 from torchvision import transforms as tr
 from torchtext.data import get_tokenizer
 from sklearn.neighbors import NearestNeighbors
+from pycocotools.coco import COCO
+from pycocotools import mask as coco_mask
 
 from bvpr.data.corpus import Corpus
 from bvpr.util import prior_boosting
@@ -27,6 +29,22 @@ from bvpr.data.transform import ABColorDiscretizer
 UNK_TOKEN = '<unk>'
 PAD_TOKEN = '<pad>'
 SOS_TOKEN = '<s>'
+
+COLOR_WORDS = (
+    "black",
+    "white",
+    "gray",
+    "grey",
+    "red",
+    "green",
+    "blue",
+    "yellow",
+    "orange",
+    "pink",
+    "purple",
+    "brown",
+    "beige",
+)
 
 
 class ColorizationDataset(Dataset):
@@ -305,7 +323,7 @@ class BaseColorsDataset(Dataset):
         self.ab_kernel = self.ab_kernel[:, self.ab_mask]
         K = self.ab_kernel.shape[1]
         self.ab_kernel = self.ab_kernel.reshape(2, K, 1, 1).float()
-    
+
     def setup_imagenet_ab_kernel(self):
         self.ab_kernel = torch.tensor(self.hull.T.copy())
         K = self.ab_kernel.shape[1]
@@ -401,7 +419,7 @@ class BaseColorsDataset(Dataset):
             "soft_target": soft_target,
             "L": raw_L,
             "rgb": rgb,
-            "index" : index,
+            "index": index,
         }
 
 
@@ -426,6 +444,196 @@ class COCODataset(BaseColorsDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.image_dir = osp.join(self.data_root, "images", self.split)
+
+
+class COCOColorsDataset(Dataset):
+    CAT_LIST = [0, 5, 2, 16, 9, 44, 6, 3, 17, 62, 21, 67, 18, 19, 4,
+                1, 64, 20, 63, 7, 72]
+
+    def __init__(self, data_root, split="train", year=2017, min_occur=5,
+                 tokenize=False, transform=None, use_voc_cats=True, K=1,
+                 gamma=0.5, sigma=5.0, weights_type="balanced",
+                 normalizer=None):
+        super().__init__()
+        self.data_root = osp.abspath(osp.expanduser(data_root))
+        self.split, self.year = split, year
+        self.split_name = f"{split}{year}"
+        self.image_dir = osp.join(self.data_root, "images", self.split_name)
+        self.annotations_dir = osp.join(self.data_root, "annotations")
+        self.captions_file = osp.join(
+            self.annotations_dir,
+            f"captions_{self.split_name}.json")
+        self.instances_file = osp.join(
+            self.annotations_dir,
+            f"instances_{self.split_name}.json")
+
+        self.captions = COCO(self.captions_file)
+        self.instances = COCO(self.instances_file)
+        self.ids = sorted(list(self.captions.anns.keys()))
+        self.corpus = self.load_corpus(min_occur)
+
+        self.transform = transform
+        self.tokenizer = get_tokenizer("basic_english")
+        self.tokenize = tokenize
+        self.use_voc_cats = use_voc_cats
+        self.K = K
+        self.gamma = gamma
+        self.sigma = sigma
+        self.weights_type = weights_type
+        self.normalizer = normalizer
+        self.setup_ab_discretizer()
+        self.setup_ab_kernel()
+        self.priors = None
+
+    def load_corpus(self, min_occur):
+        filename = f"train{self.year}-corpus-{min_occur}.pth"
+        corpus_file = osp.join(self.data_root, "corpus", filename)
+        return torch.load(corpus_file)
+
+    def load_priors(self):
+        priors_path = osp.join(self.data_root, "imagenet-priors.npy")
+        self.priors = torch.from_numpy(
+            prior_boosting(priors_path, 1.0, self.gamma)).float()
+        self.num_colors = self.priors.numel()
+
+    def setup_ab_discretizer(self):
+        self.hull = np.load(osp.join(self.data_root, "color-grid.npy"))
+        self.nbrs = NearestNeighbors(
+            n_neighbors=self.K,
+            algorithm="ball_tree")
+        self.nbrs.fit(self.hull)
+        self.p_inds = None
+        self.to_tensor = tr.ToTensor()
+
+    def ab_discretizer(self, ab):
+        H, W, _ = ab.shape
+        if self.p_inds is None:
+            self.p_inds = np.arange(0, H*W, dtype="int")[:, np.newaxis]
+        ab = ab.reshape(-1, 2)
+        dists, inds = self.nbrs.kneighbors(ab)
+        hard_targets = torch.tensor(inds[:, 0].reshape(H, W))
+        soft_targets = None
+        if self.K > 1:
+            soft_targets = np.zeros((H*W, self.num_colors))
+            wts = np.exp(-dists**2/(2*self.sigma**2))
+            wts = wts/np.sum(wts, axis=1)[:, np.newaxis]
+            soft_targets[self.p_inds, inds] = wts
+            soft_targets = soft_targets.reshape(H, W, self.num_colors)
+            soft_targets = self.to_tensor(soft_targets)
+        return hard_targets, soft_targets
+    
+    def setup_ab_kernel(self):
+        self.ab_kernel = torch.tensor(self.hull.T.copy())
+        K = self.ab_kernel.shape[1]
+        self.ab_kernel = self.ab_kernel.reshape(2, K, 1, 1).float()
+
+    def read_rgb_image(self, image_filename):
+        image_path = osp.join(self.image_dir, image_filename)
+        image = io.imread(image_path)
+        if len(image.shape) == 2:
+            image = np.stack([image] * 3, axis=-1)
+        return image
+
+    def load_instance_weights(self, image_id):
+        ids = self.instances.getAnnIds(imgIds=[image_id])
+        metadata = self.instances.loadImgs(image_id)[0]
+        h, w = metadata["height"], metadata["width"]
+        anns = self.instances.loadAnns(ids)
+        if self.use_voc_cats:
+            anns = [x for x in anns if x["category_id"] in self.CAT_LIST]
+        mask = np.zeros((h, w), dtype=np.float)
+        masks = []
+        for instance in anns:
+            rle = coco_mask.frPyObjects(instance["segmentation"], h, w)
+            this = coco_mask.decode(rle)
+            if len(this.shape) < 3:
+                this = (mask == 0) * this
+            else:
+                this = (mask == 0) * ((np.sum(this, axis=2)) > 0)
+            mask[:, :] += this.astype(np.float)
+            masks.append(this)
+        masks = masks + [mask == 0]  # append background
+        if self.weights_type == "reciprocal":
+            return self.make_reciprocal_weights(masks)
+        elif self.weights_type == "balanced":
+            return self.make_balanced_weights(masks)
+
+    def make_reciprocal_weights(self, masks):
+        h, w = masks[0].shape
+        num_pixels = [np.sum(m) for m in masks]
+        total_pixels = sum(num_pixels)
+        inv_props = [total_pixels/x for x in num_pixels]
+        factor = total_pixels / sum(inv_props)
+        inv_props = [x*factor for x in inv_props]
+        weight = np.zeros((h, w), dtype=np.float)
+        for mask, inv_p, n in zip(masks, inv_props, num_pixels):
+            val = inv_p / n
+            weight[:, :] += mask * val
+        return weight
+
+    def make_balanced_weights(self, masks):
+        h, w = masks[0].shape
+        num_pixels = [np.sum(m) for m in masks]
+        total_pixels = sum(num_pixels)
+        props = [1 for x in num_pixels]
+        factor = total_pixels / sum(props)
+        props = [x * factor for x in props]
+        weight = np.zeros((h, w), dtype=np.float)
+        for mask, p, n in zip(masks, props, num_pixels):
+            val = p / n
+            weight[:, :] += mask * val
+        return weight
+
+    def tokenize_caption(self, caption):
+        tokens = [SOS_TOKEN] + self.tokenizer(caption.lower())
+        w2i = self.corpus.dictionary.word2idx
+        tokens = [w2i.get(t, w2i[UNK_TOKEN]) for t in tokens]
+        return torch.tensor(tokens)
+
+    def __len__(self):
+        return len(self.ids)
+
+    def __getitem__(self, index):
+        try:
+            idx = self.ids[index]
+        except IndexError:
+            import ipdb; ipdb.set_trace()
+        caption_item = self.captions.anns[idx]
+        image_id = caption_item["image_id"]
+        image_item = self.captions.imgs[image_id]
+
+        rgb_image = self.read_rgb_image(image_item["file_name"])
+        weight = self.load_instance_weights(image_id)
+        if self.transform is not None:
+            rgb_image, weight = self.transform(rgb_image, weight)
+
+        lab_image = None
+        if isinstance(rgb_image, torch.Tensor):
+            lab_image = color.rgb2lab(rgb_image.permute(1, 2, 0).numpy())
+        else:
+            lab_image = color.rgb2lab(rgb_image)
+
+        raw_L = F.to_tensor(np.stack([lab_image[:, :, 0]] * 3, axis=-1))
+        ab = lab_image[:, :, 1:]
+        raw_caption = caption_item["caption"]
+        caption = self.tokenize_caption(raw_caption)
+
+        L = raw_L
+        if self.normalizer is not None:
+            L = self.normalizer(L)
+        target, _ = self.ab_discretizer(ab)
+
+        return {
+            "input_image": L,
+            "caption": caption,
+            "caption_len": len(caption),
+            "raw_caption": raw_caption,
+            "target": target,
+            "L": raw_L[:1, :, :],
+            "rgb": rgb_image,
+            "index": index,
+            "weight": weight,
+        }
 
 
 class LookupEncode(object):

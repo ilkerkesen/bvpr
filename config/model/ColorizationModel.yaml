@@ -2,6 +2,7 @@
 architecture: ColorizationModel
 multiscale: false
 use_location_embeddings: false
+full_resolution: true
 text_encoder:
   name: LSTMEncoder
   hidden_size: 256

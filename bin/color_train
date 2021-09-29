@@ -12,10 +12,11 @@ import hydra
 from omegaconf import OmegaConf
 
 from bvpr.util import process_config, create_callbacks
-from bvpr.data.colorization import COCODataset, ColorsDataset
+from bvpr.data.colorization import COCOColorsDataset, COCODataset, ColorsDataset
 from bvpr.data.colorization import FlowersDataset
 from bvpr.experiment import ColorizationExperiment as Experiment
-from bvpr.datamodule import ColorizationDataModule as DataModule
+# from bvpr.datamodule import ColorizationDataModule as DataModule
+from bvpr.datamodule import NewColorizationDataModule as DataModule
 from bvpr.data.transform import LAB2RGB
 
 
@@ -29,35 +30,35 @@ def main(config):
     pl.seed_everything(config["seed"])
     print(config)
 
-    dataset_name = config["dataset"]["dataset"]
+    dataset_name = config["dataset"].get("dataset", "new_colors")
     if dataset_name == "colors":
         Dataset = ColorsDataset
     elif dataset_name == "flowers":
         Dataset = FlowersDataset
     elif dataset_name == "coco":
         Dataset = COCODataset
+    elif dataset_name == "new_colors":
+        Dataset = COCOColorsDataset
 
     # data
     train_data = Dataset(split="train", **config["dataset"])
     config["model"] = process_config(config["model"], train_data, task="colorization")
-    if train_data.reduce_colors:
-        config["priors"] = train_data.priors
-    else:
-        config["priors"] = train_data.raw_priors
+    config["priors"] = train_data.priors
 
-    num_colors = config["priors"].numel()
+    num_colors = 313  # FIXME: hardcoded
+    if config["priors"] is not None:
+        num_colors = config["priors"].numel()
     if config["model"].get("mask_predictor", None) is not None:
         config["model"]["mask_predictor"]["num_classes"] = num_colors
     else:
-        config["model"]["network"]["num_classes"] = num_colors 
+        config["model"]["network"]["num_classes"] = num_colors
 
     # logger
     config["logger"]["save_dir"] = osp.abspath(
         osp.expanduser(config["logger"]["save_dir"]))
     if config["logger"]["name"] is None:
         architecture = config["model"]["architecture"]
-        dataset = config["dataset"]["dataset"]
-        config["logger"]["name"] = f"{architecture}-{dataset}"
+        config["logger"]["name"] = f"{architecture}-{dataset_name}"
     logger = pl.loggers.TensorBoardLogger(**config["logger"])
 
     # checkpoint
@@ -66,13 +67,12 @@ def main(config):
     experiment = Experiment(config)
     datamodule = DataModule(config)
     datamodule.setup(stage="fit")
-    experiment.lab2rgb = LAB2RGB(ab_mask=train_data.ab_mask)
+    experiment.lab2rgb = LAB2RGB(ab_kernel=train_data.ab_kernel)
     trainer = pl.Trainer(
         logger=logger,
         callbacks=callbacks,
-        **config["trainer"]) 
+        **config["trainer"])
     trainer.fit(experiment, datamodule=datamodule)
-
 
 
 if __name__ == "__main__":

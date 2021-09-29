@@ -1,0 +1,3 @@
+# @package _group_
+data_root: "/userfiles/ikesen16/data/coco_colors"
+min_occur: 5

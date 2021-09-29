@@ -6,9 +6,9 @@ import pytorch_lightning as pl
 from skimage import color
 from torchvision.transforms.transforms import Grayscale, Lambda
 
-from bvpr.data.transform import ABColorDiscretizer, PadBottomRight, DownsizeImage
+from bvpr.data.transform import ABColorDiscretizer, ExtCenterCrop, ExtCompose, ExtRandomCrop, ExtResize, ExtToTensor, PadBottomRight, DownsizeImage
 from bvpr.data.refexp import ReferDataset
-from bvpr.data.colorization import ColorsDataset, FlowersDataset, COCODataset
+from bvpr.data.colorization import COCOColorsDataset, ColorsDataset, FlowersDataset, COCODataset
 
 
 MAX_IMAGE_SIZE = 640
@@ -229,9 +229,11 @@ def batch_char_bert_input(batch):
     return text, text_l
 
 
-def segmentation_collate_fn(text_encoder="LSTMEncoder"):
-    if text_encoder == "LSTMEncoder":
+def segmentation_collate_fn(text_encoder="LSTMEncoder", version="new"):
+    if text_encoder == "LSTMEncoder" and version == "new":
         text_batch_fn = batch_lstm_input_fixed
+    elif text_encoder == "LSTMEncoder" and version == "old":
+        text_batch_fn = batch_lstm_input
     elif text_encoder in ("BERTEncoder", "RobertaEncoder"):
         text_batch_fn = batch_bert_input
     elif text_encoder == "CharBERTEncoder":
@@ -254,6 +256,7 @@ def segmentation_collate_fn(text_encoder="LSTMEncoder"):
         }
     return _segmentation_collate_fn
 
+
 def color_collate_fn(batch):
     batch = sorted(batch, key=lambda x: x["caption_len"], reverse=True)
     visual = torch.cat([bi["input_image"].unsqueeze(0) for bi in batch], dim=0)
@@ -266,9 +269,15 @@ def color_collate_fn(batch):
 
     # prepare soft targets
     soft_targets = None
-    if batch[0]["soft_target"] is not None:
+    if batch[0].get("soft_target") is not None:
         soft_targets = [bi["soft_target"].unsqueeze(0) for bi in batch]
         soft_targets = torch.cat(soft_targets, dim=0)
+
+    # prepare weights
+    weights = None
+    if batch[0].get("weight") is not None:
+        weights = [bi["weight"].unsqueeze(0) for bi in batch]
+        weights = torch.cat(weights, dim=0)
 
     # for validation / testing
     Ls = rgbs = None
@@ -286,6 +295,7 @@ def color_collate_fn(batch):
         "Ls": Ls,
         "rgbs": rgbs,
         "indexes": indexes,
+        "weights": weights,
     }
 
 
@@ -385,4 +395,83 @@ class ColorizationDataModule(pl.LightningDataModule):
             shuffle=False,
             collate_fn=color_collate_fn,
             **self.config["loader"],
+        )
+
+
+class NewColorizationDataModule(pl.LightningDataModule):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        self.normalizer = ts.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225],
+        )
+
+        image_dim = 224
+        self.train_transform = ExtCompose([
+            ExtToTensor(),
+            ExtResize(image_dim),
+            ExtRandomCrop(image_dim),
+        ])
+
+        self.val_transform = ExtCompose([
+            ExtToTensor(),
+            ExtResize(image_dim),
+            ExtCenterCrop(image_dim),
+        ])
+
+    def setup(self, stage=None):
+        if stage == "fit" or stage is None:
+            self.train_data = COCOColorsDataset(
+                split="train",
+                transform=self.train_transform,
+                normalizer=self.normalizer,
+                **self.config["dataset"],
+            )
+
+            self.val_data = COCOColorsDataset(
+                split="val",
+                transform=self.val_transform,
+                normalizer=self.normalizer,
+                **self.config["dataset"],
+            )
+
+        if stage == "test" or stage is None:
+            self.test_data = COCOColorsDataset(
+                split="val",
+                transform=self.val_transform,
+                normalizer=self.normalizer,
+                **self.config["dataset"],
+            )
+
+        if stage == "demo" or stage is None:
+            self.demo_data = COCOColorsDataset(
+                split="val",
+                transform=self.val_transform,
+                normalizer=self.normalizer,
+                **self.config["dataset"],
+            )
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_data,
+            shuffle=True,
+            collate_fn=color_collate_fn,
+            **self.config["loader"],
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_data,
+            shuffle=False,
+            collate_fn=color_collate_fn,
+            **self.config["loader"],
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_data,
+            shuffle=False,
+            collate_fn=color_collate_fn,
         )

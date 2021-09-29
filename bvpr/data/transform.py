@@ -6,6 +6,8 @@ import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
 from skimage import color
+from torchvision.transforms import functional as F_
+from torchvision import transforms as tr
 
 
 class DownsizeImage(object):
@@ -72,7 +74,7 @@ class LAB2RGB(object):
 
     def __call__(self, L, scores, T=1.0):
         probs = F.softmax(scores, dim=1)
-        probs = annealed_mean(probs, T=T) 
+        probs = annealed_mean(probs, T=T)
         ab_pred = F.conv2d(probs, self.ab_kernel)
         predicted = torch.cat([L, ab_pred], dim=1)
         predicted = predicted.permute(0, 2, 3, 1).cpu().numpy()
@@ -83,3 +85,53 @@ class LAB2RGB(object):
         elif self.mode == "demo":
             predicted = predicted.squeeze(0)
         return predicted
+
+
+class ExtToTensor(tr.ToTensor):
+    def __call__(self, image, mask):
+        image = F_.to_tensor(image)
+        mask = F_.to_tensor(mask)
+        return image, mask
+
+
+class ExtCenterCrop(tr.CenterCrop):
+    def forward(self, image, mask):
+        image = super().forward(image)
+        mask = super().forward(mask)
+        return image, mask
+
+
+class ExtRandomCrop(tr.RandomCrop):
+    def forward(self, image, mask):
+        if self.padding is not None:
+            image = F.pad(image, self.padding, self.fill, self.padding_mode)
+            mask = F.pad(mask, self.padding, self.fill, self.padding_mode)
+
+        width, height = F._get_image_size(image)
+        if self.pad_if_needed and width < self.size[1]:
+            padding = [self.size[1] - width, 0]
+            image = F.pad(image, padding, self.fill, self.padding_mode)
+            mask = F.pad(mask, padding, self.fill, self.padding_mode)
+        if self.pad_if_needed and height < self.size[0]:
+            padding = [0, self.size[0] - height]
+            image = F.pad(image, padding, self.fill, self.padding_mode)
+            mask = F.pad(mask, padding, self.fill, self.padding_mode)
+
+        i, j, h, w = self.get_params(image, self.size)
+        image = F.crop(image, i, j, h, w)
+        mask = F.crop(mask, i, j, h, w)
+        return image, mask
+    
+
+class ExtResize(tr.Resize):
+    def forward(self, image, mask):
+        image = super().forward(image)
+        mask = super().forward(mask)
+        return image, mask
+    
+
+class ExtCompose(tr.Compose):
+    def __call__(self, image, mask):
+        for t in self.transforms:
+            image, mask = t(image, mask)
+        return image, mask

@@ -146,10 +146,17 @@ class ColorizationModel(nn.Module):
             config["multimodal_encoder"],
             in_channels=num_channels,
             text_embedding_dim=hidden_size)
+
+        num_downsample = self.image_encoder.num_downsample
+        if config.get("full_resolution", False):
+            num_upsample = num_downsample
+        else:
+            num_upsample = num_downsample-2
+
         self.mask_predictor = SegmentationHead(
             self.config["multimodal_encoder"]["num_kernels"],
             self.config["mask_predictor"]["num_classes"],
-            upsampling=2**(self.image_encoder.num_downsample-2))
+            upsampling=2**num_upsample)
 
     def setup_submodule(self, model_config, submodule, **kwargs):
         config = model_config[submodule]

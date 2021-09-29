@@ -33,7 +33,7 @@ class BaseExperiment(LightningModule):
         self.config = config
 
     def forward(self, *args, **kwargs):
-        return self.model(*args, **kwargs) 
+        return self.model(*args, **kwargs)
 
     def configure_optimizers(self):
         optimizer = eval("torch.optim.{}".format(
@@ -217,15 +217,24 @@ class ColorizationExperiment(BaseExperiment):
         if self.priors is not None:
             self.priors = self.priors.to('cuda:0')
         self.loss_fn_alex = lpips.LPIPS(net='alex').to("cuda:0")
-        
-    def loss_fn(self, scores, targets, soft_targets):
-        if soft_targets is None:
+
+    def loss_fn(self, scores, targets, soft_targets=None, weights=None):
+        if soft_targets is None and weights is None:
             return F.cross_entropy(scores, targets, self.priors)
-        else:
+
+        if soft_targets is not None:
+            import ipdb; ipdb.set_trace()
             logprobs = F.log_softmax(scores, dim=1)
             weighted = soft_targets * self.priors.view(1, -1, 1, 1)
             output = -logprobs * weighted
             return output.sum() / weighted.sum()
+
+        if weights is not None:
+            logprobs = F.log_softmax(scores, dim=1)
+            weighted = None
+            output = -logprobs * weighted
+            return output.sum() / weighted.sum()
+            import ipdb; ipdb.set_trace()
 
     def training_step(self, batch, batch_index):
         scores = self(batch["images"], batch["captions"], batch["captions_l"])
@@ -287,7 +296,7 @@ class ColorizationExperiment(BaseExperiment):
         self.log("val_psnr", psnr_val / num_batches, prog_bar=True)
         self.log("val_lpips", lpips_val / num_batches, prog_bar=True)
         self.colorize_val_images()
-        
+
     def colorize_val_images(self):
         example_sets = [
             ("a [red,green,blue,purple] car parked on a rainy street", 4269, [
@@ -326,7 +335,7 @@ class ColorizationExperiment(BaseExperiment):
                 this["caption"] = dataset.tokenize_caption(caption)
                 this["caption_len"] = len(this["caption"])
                 examples.append(this)
-            
+
             batch = color_collate_fn(examples)
             images = batch["images"].to(self.device)
             captions = batch["captions"].to(self.device)
@@ -354,12 +363,12 @@ class ColorizationExperiment(BaseExperiment):
         rgbs = rgbs / (255. / 2.) - 1.
         pred_norm = pred / (255. / 2.) - 1.
         lpips_vals = self.loss_fn_alex(pred_norm, rgbs).flatten()
-        
+
         output_dir = osp.abspath(osp.expanduser(self.config["output"]))
         image_dir = osp.join(output_dir, "jpg")
         if not osp.isdir(image_dir):
           os.makedirs(image_dir)
-        
+
         output = []
         test_data = self.test_dataloader().dataset
         for i in range(B):
